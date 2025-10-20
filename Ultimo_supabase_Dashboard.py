@@ -171,20 +171,48 @@ def calcular_kpis(df):
 
 @st.cache_resource # Cachear la conexión
 def get_database_engine():
-    """Crea una conexión a Supabase usando st.secrets."""
+    """
+    Crea una conexión a Supabase usando st.secrets (local) 
+    o variables de entorno (Render).
+    """
+    DATABASE_URL = ""
     try:
+        # 1. Intentar leer de st.secrets (para .streamlit/secrets.toml local)
         DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
+        # print("Conectado vía secrets.toml (local)") # Para depurar
+    except Exception:
+        # 2. Si falla, intentar leer de una variable de entorno (para Render)
+        DATABASE_URL = os.environ.get("DATABASE_URL")
+        # if DATABASE_URL:
+        #     print("Conectado vía Environment Variable (Render)") # Para depurar
+
+    if not DATABASE_URL:
+        st.error("⚠️ No se encontró la 'DATABASE_URL'.")
+        st.error("Asegúrate de crear .streamlit/secrets.toml (local) O añadir DATABASE_URL en las 'Environment Variables' de Render.")
+        st.stop() # Detener la app si no hay DB
+        return None
+
+    try:
         engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,
             pool_recycle=1800,
             connect_args={'options': '-csearch_path=public'}
         )
+        # Probar la conexión
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        # st.sidebar.success("✅ Conectado a Supabase") # Movido a la lógica principal para evitar duplicados
         return engine
     except Exception as e:
         st.error(f"⚠️ Error conectando a Supabase: {e}")
-        st.error("Asegúrate de tener un archivo .streamlit/secrets.toml con tu [postgres] DATABASE_URL.")
+        st.error("Verifica tu DATABASE_URL en st.secrets o en las variables de entorno de Render.")
+        st.stop() # Detener la app si la conexión falla
         return None
+
+# --------------------------
+# Mapeo de Columnas (Sin cambios)
+# --------------------------
 
 def get_column_mappings():
     """Devuelve el mapeo de nombres SQL a nombres CSV (PascalCase)."""
@@ -222,9 +250,9 @@ def denormalizar_columnas_desde_sql(df_sql):
     df_csv = df_sql.rename(columns=columnas_a_renombrar)
     
     # Devolver solo las columnas que espera el dashboard (las que están en los values del mapeo)
-    columnas_esperadas = [v for v in mapeo_valido.values() if v in df_csv.columns]
+    columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
     
-    return df_csv[columnas_esperadas]
+    return df_csv[columnas_esperadas_presentes]
 
 # --------------------------
 # Carga y Procesamiento de Datos (MODIFICADO PARA SUPABASE)
