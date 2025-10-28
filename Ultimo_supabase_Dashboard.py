@@ -124,20 +124,67 @@ def calcular_vencido(row):
         return False
 
 
-# --- KPI Calculation Function (UPDATED) ---
+# --- NUEVA FUNCIÓN CACHEADA (REEMPLAZA la anterior) ---
+@st.cache_data(ttl=300) # Cachear por 5 minutos
+def get_earliest_snapshot_initial_cohort(df_full_historial):
+    """
+    Identifica los tickets que estaban 'activo' o 'iniciado' en el momento
+    exacto del *primer* timestamp registrado en todo el historial del día.
+    Devuelve un set de IDs (OrdenExterna).
+    """
+    if (df_full_historial is None or df_full_historial.empty or
+        'OrdenExterna' not in df_full_historial.columns or
+        'Estado' not in df_full_historial.columns or
+        'Timestamp_Procesado' not in df_full_historial.columns or
+        not pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado'])):
+        # st.warning("Historial inválido para cohort inicial.") # Debug
+        return set() # Devuelve un set vacío si los datos no son válidos
+
+    try:
+        # 1. Encontrar el timestamp más antiguo en TODO el historial
+        min_timestamp = df_full_historial['Timestamp_Procesado'].min()
+        
+        if pd.isna(min_timestamp):
+            # st.warning("No se encontró timestamp mínimo.") # Debug
+            return set()
+
+        # 2. Obtener el "snapshot" exacto de ese primer momento
+        df_earliest_snapshot = df_full_historial[df_full_historial['Timestamp_Procesado'] == min_timestamp]
+        
+        if df_earliest_snapshot.empty:
+            # st.warning("Snapshot vacío.") # Debug
+            return set()
+
+        # 3. De ese snapshot, filtrar los que estaban 'activo' o 'iniciado'
+        df_initial_active_in_snapshot = df_earliest_snapshot[
+            df_earliest_snapshot['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+        ]
+        
+        # 4. Devolver los IDs únicos de ese grupo inicial global
+        initial_cohort_ids = set(df_initial_active_in_snapshot['OrdenExterna'].unique())
+        # st.info(f"Cohorte inicial global: {len(initial_cohort_ids)} tickets") # Debug
+        return initial_cohort_ids
+        
+    except Exception as e:
+        st.error(f"Error en get_earliest_snapshot_initial_cohort: {e}") # Debug
+        return set()
+
+
+# --- KPI Calculation Function (CORREGIDA OTRA VEZ) ---
 def calcular_kpis(df, df_full_historial):
     """
-    Calcula los nuevos KPIs de gestión.
+    Calcula los nuevos KPIs de gestión, usando el cohort del primer snapshot.
     df = DataFrame de estados únicos/actuales (filtrado por página/rol).
-    df_full_historial = DataFrame con todo el historial del día (para cohort de 'Total_Iniciado').
+    df_full_historial = DataFrame con todo el historial del día.
     """
     # --- KPIs Estándar (basados en el estado actual/único) ---
-    if df is None or df.empty or 'Estado' not in df.columns:
-        return {
+    default_kpis = {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
             'Validados': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
             'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0
         }
+    if df is None or df.empty or 'Estado' not in df.columns or 'OrdenExterna' not in df.columns:
+        return default_kpis
     
     df_kpi = df.copy()
     df_kpi['Estado'] = df_kpi['Estado'].fillna('desconocido').astype(str).str.lower()
@@ -152,71 +199,60 @@ def calcular_kpis(df, df_full_historial):
     eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
 
     # --- KPIs Nuevos (Total_Iniciado y Eficiencia_Inicial) ---
-    total_iniciado = 0
-    manejados_inicial = 0
+    total_iniciado_en_pagina = 0
+    manejados_inicial_en_pagina = 0
     eficiencia_inicial = 0.0
 
-    # Validar que tenemos los datos y columnas necesarios
-    ts_col_valid = (df_full_historial is not None and not df_full_historial.empty and
-                    'OrdenExterna' in df_full_historial.columns and
-                    'Estado' in df_full_historial.columns and
-                    'Timestamp_Procesado' in df_full_historial.columns and
-                    pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado']))
+    # 1. Obtener el "grupo" global de IDs del *primer snapshot*
+    global_initial_cohort_ids = get_earliest_snapshot_initial_cohort(df_full_historial)
 
-    if ts_col_valid and not df_kpi.empty:
+    if global_initial_cohort_ids: # Solo proceder si el cohort global no está vacío
         try:
-            # 1. Obtener los tickets relevantes (los que están en el DF de estado actual)
-            relevant_tickets = df_kpi['OrdenExterna'].unique()
-            df_hist_relevant = df_full_historial[df_full_historial['OrdenExterna'].isin(relevant_tickets)]
+            # 2. Obtener los tickets en la *página actual* (filtrada por supervisor, etc.)
+            tickets_en_pagina_actual_ids = set(df_kpi['OrdenExterna'].unique())
 
-            if not df_hist_relevant.empty:
-                # 2. Encontrar la *primera* aparición de cada ticket
-                df_hist_sorted = df_hist_relevant.sort_values('Timestamp_Procesado', ascending=True)
-                df_first_appearance = df_hist_sorted.drop_duplicates(subset=['OrdenExterna'], keep='first')
+            # 3. Encontrar la INTERSECCIÓN: Tickets del cohort inicial global que están en esta página.
+            cohort_tickets_in_current_page_ids = global_initial_cohort_ids.intersection(tickets_en_pagina_actual_ids)
+            
+            # Este es el KPI 'Total Iniciado' para esta página (Ej: 664)
+            total_iniciado_en_pagina = len(cohort_tickets_in_current_page_ids)
+
+            if total_iniciado_en_pagina > 0:
+                # 4. Obtener el *estado actual* (de df_kpi) de *solo* ese grupo intersectado
+                df_kpi_del_cohort_intersectado = df_kpi[df_kpi['OrdenExterna'].isin(cohort_tickets_in_current_page_ids)]
+
+                # 5. Contar cuántos de *ese grupo intersectado* están ahora manejados
+                cerrados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
+                referidos_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'pend trab interno'].shape[0]
+                citados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
+                validados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'validacion int'].shape[0]
                 
-                # 3. Calcular Total_Iniciado: Cuántos de esos *primero* estaban 'activo' o 'iniciado'
-                df_iniciados_first = df_first_appearance[df_first_appearance['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])]
-                total_iniciado = df_iniciados_first.shape[0]
-
-                if total_iniciado > 0:
-                    # 4. Obtener los IDs de ese cohort
-                    tickets_iniciados_ids = df_iniciados_first['OrdenExterna'].unique()
-                    
-                    # 5. Ver el estado *actual* (del df_kpi) de *solo esos tickets*
-                    df_latest_of_iniciados = df_kpi[df_kpi['OrdenExterna'].isin(tickets_iniciados_ids)]
-
-                    # 6. Calcular cuántos de ese cohort fueron manejados (usando su estado actual)
-                    cerrados_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
-                    referidos_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'] == 'pend trab interno'].shape[0]
-                    citados_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-                    validados_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'] == 'validacion int'].shape[0]
-                    
-                    manejados_inicial = cerrados_inicial + referidos_inicial + citados_inicial + validados_inicial
-                    
-                    # 7. Calcular Eficiencia_Inicial
-                    eficiencia_inicial = round(manejados_inicial * 100 / total_iniciado, 1)
+                manejados_inicial_en_pagina = cerrados_inicial + referidos_inicial + citados_inicial + validados_inicial
+                
+                # 6. Calcular Eficiencia_Inicial (Manejados de este grupo / Total de este grupo)
+                eficiencia_inicial = round(manejados_inicial_en_pagina * 100 / total_iniciado_en_pagina, 1)
 
         except Exception as e:
-            # st.warning(f"Error calculando KPIs iniciales: {e}") # Opcional: para debug
-            total_iniciado = 0
-            manejados_inicial = 0
+            st.error(f"Error calculando KPIs iniciales: {e}") # Debug
+            total_iniciado_en_pagina = 0
+            manejados_inicial_en_pagina = 0
             eficiencia_inicial = 0.0
-
 
     return {
         'Total': total,
         'Cerrados': cerrados,
         'Referidos': referidos,
         'Citados': citados,
-        'Validados': validados,
+        'Validados': validados, # Sigue siendo Validados (Int) basado en tu código anterior
         'Pendientes': pendientes,
         'Manejados': manejados,
         'Eficiencia_Total_%': eficiencia_total,
-        'Total_Iniciado': total_iniciado,
-        'Manejados_Inicial': manejados_inicial,
-        'Eficiencia_Inicial': eficiencia_inicial
+        'Total_Iniciado': total_iniciado_en_pagina, 
+        'Manejados_Inicial': manejados_inicial_en_pagina, 
+        'Eficiencia_Inicial': eficiencia_inicial 
     }
 # --- End of KPI Calculation Function ---
+
 
 # ==============================================================================
 # --- NUEVAS FUNCIONES: Conexión Supabase y Mapeo de Columnas ---
