@@ -91,7 +91,7 @@ def calcular_pyme_y_vence(fecha_creacion):
     ahora = datetime.now()
     hoy = ahora.date()
     ayer = hoy - timedelta(days=1)
-     # Asegurarse que fecha_creacion es datetime
+    # Asegurarse que fecha_creacion es datetime
     if not isinstance(fecha_creacion, pd.Timestamp):
         fecha_creacion = pd.to_datetime(fecha_creacion, errors='coerce')
         if pd.isna(fecha_creacion): return False, None # Salir si la conversión falla
@@ -125,43 +125,96 @@ def calcular_vencido(row):
 
 
 # --- KPI Calculation Function (UPDATED) ---
-def calcular_kpis(df):
-    """Calcula los nuevos KPIs de gestión."""
-    # Asegurarse que df no esté vacío y tenga la columna 'Estado'
+def calcular_kpis(df, df_full_historial):
+    """
+    Calcula los nuevos KPIs de gestión.
+    df = DataFrame de estados únicos/actuales (filtrado por página/rol).
+    df_full_historial = DataFrame con todo el historial del día (para cohort de 'Total_Iniciado').
+    """
+    # --- KPIs Estándar (basados en el estado actual/único) ---
     if df is None or df.empty or 'Estado' not in df.columns:
         return {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
-            'Validados': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_%': 0.0
+            'Validados': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
+            'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0
         }
-    # Convertir estado a string para evitar errores con tipos mixtos
+    
     df_kpi = df.copy()
     df_kpi['Estado'] = df_kpi['Estado'].fillna('desconocido').astype(str).str.lower()
 
-
     total = len(df_kpi)
-    # --- Cambio aquí: 'Cerrados' ahora incluye 'cerrado' y 'validacion ext' ---
     cerrados = df_kpi[df_kpi['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
-    # --- Fin del cambio ---
     referidos = df_kpi[df_kpi['Estado'] == 'pend trab interno'].shape[0]
     citados = df_kpi[df_kpi['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-    validados = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0] # Asumiendo que 'validacion int' es diferente
+    validados = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0]
     pendientes = df_kpi[df_kpi['Estado'].isin(['activo', 'iniciado'])].shape[0]
-
-    # 'manejados' incluye los nuevos 'cerrados' (que ya tienen 'validacion ext')
-    # más los otros estados de manejo que no se superponen.
     manejados = cerrados + referidos + citados + validados
+    eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
 
-    eficiencia = round(manejados * 100 / total, 1) if total > 0 else 0.0
+    # --- KPIs Nuevos (Total_Iniciado y Eficiencia_Inicial) ---
+    total_iniciado = 0
+    manejados_inicial = 0
+    eficiencia_inicial = 0.0
+
+    # Validar que tenemos los datos y columnas necesarios
+    ts_col_valid = (df_full_historial is not None and not df_full_historial.empty and
+                    'OrdenExterna' in df_full_historial.columns and
+                    'Estado' in df_full_historial.columns and
+                    'Timestamp_Procesado' in df_full_historial.columns and
+                    pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado']))
+
+    if ts_col_valid and not df_kpi.empty:
+        try:
+            # 1. Obtener los tickets relevantes (los que están en el DF de estado actual)
+            relevant_tickets = df_kpi['OrdenExterna'].unique()
+            df_hist_relevant = df_full_historial[df_full_historial['OrdenExterna'].isin(relevant_tickets)]
+
+            if not df_hist_relevant.empty:
+                # 2. Encontrar la *primera* aparición de cada ticket
+                df_hist_sorted = df_hist_relevant.sort_values('Timestamp_Procesado', ascending=True)
+                df_first_appearance = df_hist_sorted.drop_duplicates(subset=['OrdenExterna'], keep='first')
+                
+                # 3. Calcular Total_Iniciado: Cuántos de esos *primero* estaban 'activo' o 'iniciado'
+                df_iniciados_first = df_first_appearance[df_first_appearance['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])]
+                total_iniciado = df_iniciados_first.shape[0]
+
+                if total_iniciado > 0:
+                    # 4. Obtener los IDs de ese cohort
+                    tickets_iniciados_ids = df_iniciados_first['OrdenExterna'].unique()
+                    
+                    # 5. Ver el estado *actual* (del df_kpi) de *solo esos tickets*
+                    df_latest_of_iniciados = df_kpi[df_kpi['OrdenExterna'].isin(tickets_iniciados_ids)]
+
+                    # 6. Calcular cuántos de ese cohort fueron manejados (usando su estado actual)
+                    cerrados_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
+                    referidos_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'] == 'pend trab interno'].shape[0]
+                    citados_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
+                    validados_inicial = df_latest_of_iniciados[df_latest_of_iniciados['Estado'] == 'validacion int'].shape[0]
+                    
+                    manejados_inicial = cerrados_inicial + referidos_inicial + citados_inicial + validados_inicial
+                    
+                    # 7. Calcular Eficiencia_Inicial
+                    eficiencia_inicial = round(manejados_inicial * 100 / total_iniciado, 1)
+
+        except Exception as e:
+            # st.warning(f"Error calculando KPIs iniciales: {e}") # Opcional: para debug
+            total_iniciado = 0
+            manejados_inicial = 0
+            eficiencia_inicial = 0.0
+
 
     return {
         'Total': total,
-        'Cerrados': cerrados, # Ahora incluye 'cerrado' y 'validacion ext'
+        'Cerrados': cerrados,
         'Referidos': referidos,
         'Citados': citados,
-        'Validados': validados, # Mantenemos 'validacion int' aquí por si es distinto
+        'Validados': validados,
         'Pendientes': pendientes,
         'Manejados': manejados,
-        'Eficiencia_%': eficiencia
+        'Eficiencia_Total_%': eficiencia_total,
+        'Total_Iniciado': total_iniciado,
+        'Manejados_Inicial': manejados_inicial,
+        'Eficiencia_Inicial': eficiencia_inicial
     }
 # --- End of KPI Calculation Function ---
 
@@ -271,7 +324,7 @@ def cargar_datos():
         # print("Iniciando carga desde Supabase...") # Debug
         query = text("SELECT * FROM historial_cambios_hoy") # Usar text()
         with engine.connect() as conn:
-             df_sql = pd.read_sql(query, conn)
+            df_sql = pd.read_sql(query, conn)
         # print(f"Datos cargados desde SQL: {df_sql.shape}") # Debug
         
         if df_sql.empty:
@@ -283,8 +336,8 @@ def cargar_datos():
         # print(f"Columnas denormalizadas: {df.columns.tolist()}") # Debug
         
         if df.empty:
-             st.error("Error al mapear columnas de Supabase. El DataFrame quedó vacío.")
-             return pd.DataFrame()
+            st.error("Error al mapear columnas de Supabase. El DataFrame quedó vacío.")
+            return pd.DataFrame()
 
     except Exception as e:
         st.error(f"❌ Error al cargar datos desde Supabase: {e}")
@@ -372,17 +425,17 @@ def obtener_datos_unicos(df_input):
                     not df_input['Timestamp_Procesado'].isna().all())
 
     if not ts_col_valid:
-         df_temp = df_input.dropna(subset=['OrdenExterna'])
-         result = df_temp.drop_duplicates(subset=['OrdenExterna'], keep='first')
-         return result
+        df_temp = df_input.dropna(subset=['OrdenExterna'])
+        result = df_temp.drop_duplicates(subset=['OrdenExterna'], keep='first')
+        return result
     else:
-         df_temp = df_input.dropna(subset=['OrdenExterna'])
-         if not pd.api.types.is_datetime64_any_dtype(df_temp['Timestamp_Procesado']):
-             df_temp['Timestamp_Procesado'] = pd.to_datetime(df_temp['Timestamp_Procesado'], errors='coerce')
-         df_temp_valid_ts = df_temp.dropna(subset=['Timestamp_Procesado'])
-         df_sorted = df_temp_valid_ts.sort_values('Timestamp_Procesado', ascending=False)
-         result = df_sorted.drop_duplicates(subset=['OrdenExterna'], keep='first')
-         return result
+        df_temp = df_input.dropna(subset=['OrdenExterna'])
+        if not pd.api.types.is_datetime64_any_dtype(df_temp['Timestamp_Procesado']):
+            df_temp['Timestamp_Procesado'] = pd.to_datetime(df_temp['Timestamp_Procesado'], errors='coerce')
+        df_temp_valid_ts = df_temp.dropna(subset=['Timestamp_Procesado'])
+        df_sorted = df_temp_valid_ts.sort_values('Timestamp_Procesado', ascending=False)
+        result = df_sorted.drop_duplicates(subset=['OrdenExterna'], keep='first')
+        return result
 
 
 def formatear_para_display(df_input):
@@ -405,25 +458,25 @@ def formatear_para_display(df_input):
                 try:
                     df_display[col] = df_display[col].astype(str).replace('NaT', None).replace('nan', None).replace('<NA>', None)
                 except Exception:
-                     df_display[col] = None
+                    df_display[col] = None
         else: # Si no es datetime (quizás ya es string o tiene originales)
-             try:
-                 df_display[col] = df_display[col].apply(lambda x: str(x) if pd.notna(x) else None)
-                 df_display[col] = df_display[col].replace('nan', None).replace('NaT', None).replace('<NA>', None).replace('None',None)
-             except Exception:
-                  df_display[col] = None
+            try:
+                df_display[col] = df_display[col].apply(lambda x: str(x) if pd.notna(x) else None)
+                df_display[col] = df_display[col].replace('nan', None).replace('NaT', None).replace('<NA>', None).replace('None',None)
+            except Exception:
+                df_display[col] = None
 
     # Convertir todas las columnas restantes a string para asegurar consistencia
     for col in df_display.columns:
         if col not in columnas_fechas_presentes:
             try:
-                 if col == 'Vencido' and df_display[col].dtype == 'bool':
-                     df_display[col] = df_display[col].map({True: 'Sí', False: 'No'}).fillna('No')
-                 else:
-                     df_display[col] = df_display[col].apply(lambda x: str(x) if pd.notna(x) else None)
-                     df_display[col] = df_display[col].replace('nan', None).replace('<NA>', None).replace('None', None).replace('None ', None)
+                if col == 'Vencido' and df_display[col].dtype == 'bool':
+                    df_display[col] = df_display[col].map({True: 'Sí', False: 'No'}).fillna('No')
+                else:
+                    df_display[col] = df_display[col].apply(lambda x: str(x) if pd.notna(x) else None)
+                    df_display[col] = df_display[col].replace('nan', None).replace('<NA>', None).replace('None', None).replace('None ', None)
             except Exception:
-                 df_display[col] = None
+                df_display[col] = None
 
     return df_display
 
@@ -446,13 +499,14 @@ def to_excel(df: pd.DataFrame):
 
 def crear_resumen_admin(df, agrupar_por='Supervisor'):
     """Crea tabla de resumen para el rol de Administración."""
+    # MODIFICADO: Añade fila de TOTAL al final
+    
+    cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Validados_Int', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']
     if df is None or df.empty:
-        cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Validados_Int', 'Pendientes', 'Total Manejado', 'Eficiencia_%']
         return pd.DataFrame(columns=cols)
 
     if agrupar_por not in df.columns or 'OrdenExterna' not in df.columns or 'Estado' not in df.columns:
         st.warning(f"Faltan columnas esenciales ('{agrupar_por}', 'OrdenExterna', 'Estado') para crear el resumen.")
-        cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Validados_Int', 'Pendientes', 'Total Manejado', 'Eficiencia_%']
         return pd.DataFrame(columns=cols)
 
     df_copy = df.copy()
@@ -469,9 +523,31 @@ def crear_resumen_admin(df, agrupar_por='Supervisor'):
     ).reset_index()
 
     resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Validados_Int']
-    resumen['Eficiencia_%'] = np.where(resumen['Total'] > 0,
-                                     round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
-                                     0.0)
+    resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
+                                          round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+                                          0.0)
+    
+    # --- NUEVO: Añadir fila de TOTAL ---
+    if not resumen.empty:
+        total_row = pd.Series(name='Total')
+        total_row[agrupar_por] = 'TOTAL'
+        total_row['Total'] = resumen['Total'].sum()
+        total_row['Cerrados'] = resumen['Cerrados'].sum()
+        total_row['Referidos'] = resumen['Referidos'].sum()
+        total_row['Citados'] = resumen['Citados'].sum()
+        total_row['Validados_Int'] = resumen['Validados_Int'].sum()
+        total_row['Pendientes'] = resumen['Pendientes'].sum()
+        total_row['Total Manejado'] = resumen['Total Manejado'].sum()
+        
+        # Calcular Eficiencia Total General
+        total_manejado_general = total_row['Total Manejado']
+        total_general = total_row['Total']
+        total_row['Eficiencia_Total_%'] = round(total_manejado_general * 100 / total_general, 1) if total_general > 0 else 0.0
+        
+        # Convertir a DataFrame antes de concatenar
+        resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
+    # --- FIN DEL NUEVO CÓDIGO ---
+
     return resumen
 
 
@@ -506,14 +582,14 @@ def filtrar_dataframe_con_historial(df_completo, df_unicos_filtrados, texto_busq
     cols_presentes = [col for col in cols_busqueda if col in df_para_buscar.columns]
 
     if not cols_presentes or 'OrdenExterna' not in df_para_buscar.columns:
-         st.warning("Columnas clave no encontradas para búsqueda.")
-         return pd.DataFrame(columns=df_completo.columns)
+        st.warning("Columnas clave no encontradas para búsqueda.")
+        return pd.DataFrame(columns=df_completo.columns)
 
     try:
-         mask = df_para_buscar[cols_presentes].astype(str).apply(lambda x: x.str.lower().str.contains(texto_busqueda, na=False)).any(axis=1)
+        mask = df_para_buscar[cols_presentes].astype(str).apply(lambda x: x.str.lower().str.contains(texto_busqueda, na=False)).any(axis=1)
     except Exception as e:
-         st.error(f"Error al aplicar filtro de búsqueda: {e}")
-         return pd.DataFrame(columns=df_completo.columns)
+        st.error(f"Error al aplicar filtro de búsqueda: {e}")
+        return pd.DataFrame(columns=df_completo.columns)
 
     tickets_encontrados = df_para_buscar[mask]['OrdenExterna'].unique()
 
@@ -535,7 +611,7 @@ def filtrar_dataframe_con_historial(df_completo, df_unicos_filtrados, texto_busq
     if ts_col_valid_hist:
         df_historial = df_historial.sort_values(['OrdenExterna', 'Timestamp_Procesado'], ascending=[True, False], na_position='last')
     elif 'OrdenExterna' in df_historial.columns:
-         df_historial = df_historial.sort_values('OrdenExterna')
+        df_historial = df_historial.sort_values('OrdenExterna')
 
     return df_historial
 
@@ -599,7 +675,10 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 
 def display_kpi_metrics(kpis, critical_metric_key=None, critical_delta_text="Críticos"):
     """Muestra la cuadrícula de KPIs, con opción de marcar una métrica como crítica."""
-    col1, col2, col3, col4 = st.columns(4)
+    # MODIFICADO: Añadidos KPIs Total_Iniciado y Eficiencia_Inicial.
+    # Layout cambiado a 2 filas de 5.
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
         value_to_display = kpis.get(key, 0)
@@ -608,34 +687,45 @@ def display_kpi_metrics(kpis, critical_metric_key=None, critical_delta_text="Cr�
         if key == critical_metric_key and value_to_display > 0:
             col.metric(label, value_to_display, delta=critical_delta_text, delta_color="inverse")
         elif key == critical_metric_key and value_to_display <= 0 :
-             col.metric(label, value_to_display)
+            col.metric(label, value_to_display)
         else:
             col.metric(label, value_to_display)
 
     if st.session_state.user_role == "admin":
-        metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
-        eficiencia_valor = kpis.get('Eficiencia_%', 0.0)
-        col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
-        metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
-        metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-
-        col5, col6, col7, col8 = st.columns(4)
-        metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
-        metric_with_critical(col6, "📤 Referidos", 'Referidos')
-        metric_with_critical(col7, "📅 Citados", 'Citados')
-        metric_with_critical(col8, "✔️ Validados (Int)", 'Validados')
-    else:
+        # Fila 1
         metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
         metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-        metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
-        metric_with_critical(col4, "📤 Referidos", 'Referidos')
+        metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
+        metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
+        metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
 
-        col5, col6, col7, col8 = st.columns(4)
-        metric_with_critical(col5, "📅 Citados", 'Citados')
-        metric_with_critical(col6, "✔️ Validados (Int)", 'Validados')
-        metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
-        eficiencia_valor = kpis.get('Eficiencia_%', 0.0)
-        col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+        # Fila 2
+        col6, col7, col8, col9, col10 = st.columns(5)
+        eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+        col6.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
+        eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
+        col7.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+        metric_with_critical(col8, "📤 Referidos", 'Referidos')
+        metric_with_critical(col9, "📅 Citados", 'Citados')
+        metric_with_critical(col10, "✔️ Validados (Int)", 'Validados')
+        
+    else: # Vista Gerencia / Supervisor
+        # Fila 1
+        metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
+        metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+        metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
+        metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
+        metric_with_critical(col5, "📤 Referidos", 'Referidos')
+
+        # Fila 2
+        col6, col7, col8, col9, col10 = st.columns(5)
+        metric_with_critical(col6, "📅 Citados", 'Citados')
+        metric_with_critical(col7, "✔️ Validados (Int)", 'Validados')
+        metric_with_critical(col8, "🔄 Total Manejado", 'Manejados')
+        eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+        col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
+        eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
+        col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
 
 
 def display_detail_table(df_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix):
@@ -661,8 +751,8 @@ def display_detail_table(df_data, df_full_historial, role, role_supervisor_id, g
     st.dataframe(df_display_final, use_container_width=True, hide_index=True)
 
     if not df_display_original.empty:
-         excel_data = to_excel(df_display_original)
-         if excel_data:
+        excel_data = to_excel(df_display_original)
+        if excel_data:
             st.download_button(
                 label="📥 Descargar Detalle como Excel",
                 data=excel_data,
@@ -683,7 +773,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         return
 
     # Calcular KPIs *antes* de los chequeos de rol
-    kpis = calcular_kpis(df_page_data)
+    # MODIFICADO: Pasa el df_full_historial para los nuevos KPIs
+    kpis = calcular_kpis(df_page_data, df_full_historial)
 
     # --- Vista Admin ---
     if role == "admin":
@@ -691,16 +782,23 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         total_tickets_admin = kpis.get('Total', 0)
         pendientes_admin_kpi = kpis.get('Pendientes', 0)
         cerrados_admin = kpis.get('Cerrados', 0)
-        manejados_kpi_admin = kpis.get('Referidos', 0) + kpis.get('Citados', 0) + kpis.get('Validados', 0)
-        eficiencia_kpi_admin = round((cerrados_admin + manejados_kpi_admin) * 100 / total_tickets_admin, 1) if total_tickets_admin > 0 else 0.0
+        manejados_kpi_admin = kpis.get('Manejados', 0) # 'Manejados' ya incluye cerrados, ref, cit, val
+        
+        # MODIFICADO: Nombres y nuevos KPIs
+        eficiencia_kpi_admin = kpis.get('Eficiencia_Total_%', 0.0)
+        total_iniciado_admin = kpis.get('Total_Iniciado', 0)
+        eficiencia_inicial_admin = kpis.get('Eficiencia_Inicial', 0.0)
 
         st.subheader("📊 Resumen General (Todos los Supervisores)")
-        col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
+        # MODIFICADO: Layout de 7 columnas para incluir los nuevos KPIs
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
         col_kpi1.metric("Total tickets", total_tickets_admin)
-        col_kpi2.metric("Eficiencia", f"{eficiencia_kpi_admin:.1f}%")
-        col_kpi3.metric("Cerrados", cerrados_admin)
-        col_kpi4.metric("Pendiente", pendientes_admin_kpi)
-        col_kpi5.metric("Manejados", manejados_kpi_admin)
+        col_kpi2.metric("Eficiencia Total", f"{eficiencia_kpi_admin:.1f}%")
+        col_kpi3.metric("Total Iniciado", total_iniciado_admin)
+        col_kpi4.metric("Eficiencia Inicial", f"{eficiencia_inicial_admin:.1f}%")
+        col_kpi5.metric("Cerrados", cerrados_admin)
+        col_kpi6.metric("Pendiente", pendientes_admin_kpi)
+        col_kpi7.metric("Manejados", manejados_kpi_admin)
 
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
@@ -714,18 +812,22 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 # --- Gráficos Existentes (Eficiencia y Total Tickets) ---
                 col_chart1, col_chart2 = st.columns(2)
                 with col_chart1:
-                    st.markdown("#### 📊 Eficiencia por supervisor (%)")
-                    resumen_eff_sorted = resumen_admin.sort_values('Eficiencia_%', ascending=True)
-                    fig_eff = px.bar(resumen_eff_sorted, x='Eficiencia_%', y='Supervisor', orientation='h', text='Eficiencia_%', color='Eficiencia_%', color_continuous_scale='Blues')
+                    st.markdown("#### 📊 Eficiencia Total por supervisor (%)")
+                    # Excluir la fila 'TOTAL' del gráfico
+                    resumen_grafico_eff = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
+                    resumen_eff_sorted = resumen_grafico_eff.sort_values('Eficiencia_Total_%', ascending=True)
+                    fig_eff = px.bar(resumen_eff_sorted, x='Eficiencia_Total_%', y='Supervisor', orientation='h', text='Eficiencia_Total_%', color='Eficiencia_Total_%', color_continuous_scale='Blues')
                     fig_eff.add_shape(type="line", x0=80, y0=-0.5, x1=80, y1=len(resumen_eff_sorted['Supervisor'])-0.5, line=dict(color="grey", width=2, dash="dash"))
                     fig_eff.add_annotation(x=80, y=len(resumen_eff_sorted['Supervisor'])-0.5, text="Meta 80%", showarrow=False, yshift=10, xshift=-10)
                     fig_eff.update_traces(texttemplate='%{text:.1f}%', textposition='auto')
-                    fig_eff.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title="Eficiencia (%)", yaxis_title=None, coloraxis_showscale=False, uniformtext_minsize=8, uniformtext_mode='hide')
+                    fig_eff.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title="Eficiencia Total (%)", yaxis_title=None, coloraxis_showscale=False, uniformtext_minsize=8, uniformtext_mode='hide')
                     st.plotly_chart(fig_eff, use_container_width=True)
 
                 with col_chart2:
                     st.markdown("#### 🎫 Tickets por supervisor")
-                    resumen_total_sorted = resumen_admin.sort_values('Total', ascending=False)
+                    # Excluir la fila 'TOTAL' del gráfico
+                    resumen_grafico_total = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
+                    resumen_total_sorted = resumen_grafico_total.sort_values('Total', ascending=False)
                     fig_total = px.bar(resumen_total_sorted, x='Supervisor', y='Total', text='Total', color='Total', color_continuous_scale='Blues')
                     fig_total.update_traces(texttemplate='%{text}', textposition='outside')
                     fig_total.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title=None, yaxis_title="Total Tickets", coloraxis_showscale=False)
@@ -777,7 +879,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         )
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                                   xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                                                xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
                         st.plotly_chart(fig_vencidos, use_container_width=True)
                     else:
                         st.info("No hay PYMEs vencidas para mostrar en este desglose con los filtros actuales.")
@@ -798,10 +900,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     )
 
             except Exception as e:
-                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
-                 if not resumen_admin.empty:
-                     st.info("Mostrando tabla detallada como alternativa.")
-                     st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
+                st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
+                if not resumen_admin.empty:
+                    st.info("Mostrando tabla detallada como alternativa.")
+                    st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
 
     # --- Vista Gerencia ---
     elif role == "gerencia":
@@ -816,10 +918,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         if 'Asignado_A' in df_page_data.columns:
             resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A')
             if not resumen_tec.empty and 'Supervisor' in resumen_tec.columns:
-                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True)
+                resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True)
             st.dataframe(resumen_tec, use_container_width=True, hide_index=True)
         else:
-             st.info("No hay datos de 'Asignado_A' para mostrar resumen por técnico.")
+            st.info("No hay datos de 'Asignado_A' para mostrar resumen por técnico.")
 
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
@@ -836,7 +938,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         if agrupar_por in df_page_data.columns:
             resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por)
             if not resumen.empty and 'Supervisor' in resumen.columns and agrupar_por != 'Supervisor':
-                 resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True)
+                resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True)
 
             if not resumen.empty:
                 st.dataframe(resumen, use_container_width=True, hide_index=True)
@@ -849,9 +951,9 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     )
             else:
-                 st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
+                st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
         else:
-             st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+            st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
 
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
@@ -884,11 +986,11 @@ estado_options = []
 
 if df_unicos_base is not None and not df_unicos_base.empty:
     if 'Supervisor' in df_unicos_base.columns:
-         supervisores_validos = sorted([str(s) for s in df_unicos_base['Supervisor'].dropna().unique() if str(s).strip()])
-         supervisor_options.extend(supervisores_validos)
+        supervisores_validos = sorted([str(s) for s in df_unicos_base['Supervisor'].dropna().unique() if str(s).strip()])
+        supervisor_options.extend(supervisores_validos)
     if 'Estado' in df_unicos_base.columns:
-         estados_validos = sorted([str(e) for e in df_unicos_base['Estado'].dropna().unique() if str(e).strip()])
-         estado_options = estados_validos
+        estados_validos = sorted([str(e) for e in df_unicos_base['Estado'].dropna().unique() if str(e).strip()])
+        estado_options = estados_validos
 
 # Controles de Sidebar
 if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
@@ -904,22 +1006,22 @@ df_supervisor_unicos = df_unicos_base.copy() if df_unicos_base is not None else 
 if not df_supervisor_unicos.empty:
     if st.session_state.user_role == "supervisor":
         if 'Supervisor' in df_supervisor_unicos.columns:
-             df_supervisor_unicos = df_supervisor_unicos[df_supervisor_unicos['Supervisor'].astype(str) == str(st.session_state.supervisor_id)]
+            df_supervisor_unicos = df_supervisor_unicos[df_supervisor_unicos['Supervisor'].astype(str) == str(st.session_state.supervisor_id)]
         else:
-             df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
+            df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
     elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
-         if 'Supervisor' in df_supervisor_unicos.columns:
+        if 'Supervisor' in df_supervisor_unicos.columns:
             df_supervisor_unicos = df_supervisor_unicos[df_supervisor_unicos['Supervisor'].astype(str) == str(supervisor_sel)]
-         else:
-             df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
+        else:
+            df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
 
 # df_unicos: Filtrado por rol/supervisor Y por estado (para todas las demás páginas)
 df_unicos = df_supervisor_unicos.copy() if df_supervisor_unicos is not None else pd.DataFrame()
 if not df_unicos.empty and estatus_sel:
-     if 'Estado' in df_unicos.columns:
+    if 'Estado' in df_unicos.columns:
         df_unicos = df_unicos[df_unicos['Estado'].astype(str).isin(estatus_sel)]
-     elif not df_unicos.empty:
-          df_unicos = pd.DataFrame(columns=df_supervisor_unicos.columns if df_supervisor_unicos is not None else [])
+    elif not df_unicos.empty:
+        df_unicos = pd.DataFrame(columns=df_supervisor_unicos.columns if df_supervisor_unicos is not None else [])
 
 
 # --- Contenido de las Páginas ---
@@ -949,10 +1051,10 @@ if menu == "🏠 Principal":
 
         if df_unicos is not None and not df_unicos.empty:
             if 'Estado' in df_unicos.columns:
-                 df_activos_unicos = df_unicos[df_unicos['Estado'].astype(str).isin(['activo', 'iniciado'])]
-                 activos_iniciados = df_activos_unicos.shape[0]
+                df_activos_unicos = df_unicos[df_unicos['Estado'].astype(str).isin(['activo', 'iniciado'])]
+                activos_iniciados = df_activos_unicos.shape[0]
             if 'Es_PYME_Negocio' in df_unicos.columns:
-                 pymes = df_unicos[df_unicos['Es_PYME_Negocio'] == True].shape[0]
+                pymes = df_unicos[df_unicos['Es_PYME_Negocio'] == True].shape[0]
 
             hoy = pd.Timestamp.now().normalize()
 
@@ -968,17 +1070,29 @@ if menu == "🏠 Principal":
                 fecha_3_dias = hoy - timedelta(days=3)
                 ant_3 = df_antiguedad[df_antiguedad['OE_Creacion'].dt.normalize() == fecha_3_dias].shape[0]
                 fecha_limite_ant = hoy - timedelta(days=3)
-                ant_extrema = df_antiguedad[df_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite_ant].shape[0]
+                ant_extrema = df_antigad[df_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite_ant].shape[0]
+        
+        # --- MODIFICADO: Llamar a display_kpi_metrics para unificar la vista ---
+        # (La vista de Admin/Gerencia en 'Principal' es manejada por render_dashboard_page)
+        # (La vista de Supervisor en 'Principal' usa kpis personalizados O display_kpi_metrics)
+        # -> Vamos a unificarla para que Supervisor vea los mismos KPIs que Gerencia
+        
+        # Calcular KPIs para el Supervisor
+        kpis_supervisor = calcular_kpis(df_unicos, df)
+        
+        # Mostrar los KPIs unificados
+        display_kpi_metrics(kpis_supervisor, critical_metric_key='Pendientes')
+        
+        # Quitar las métricas antiguas de 6 columnas
+        # col1, col2, col3 = st.columns(3)
+        # col1.metric("🎫 Tickets Activos/Iniciados", activos_iniciados)
+        # col2.metric("⏰ Puntuales (Activos/Iniciados)", puntuales)
+        # col3.metric("🏢 Total PYMEs (Todos los estados)", pymes)
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("🎫 Tickets Activos/Iniciados", activos_iniciados)
-        col2.metric("⏰ Puntuales (Activos/Iniciados)", puntuales)
-        col3.metric("🏢 Total PYMEs (Todos los estados)", pymes)
-
-        col4, col5, col6 = st.columns(3)
-        col4.metric("🆕 Tickets Hoy (Activos/Iniciados)", ant_0)
-        col5.metric("📅 Antigüedad 3 días (Activos/Iniciados)", ant_3)
-        col6.metric("⚠️ Antigüedad Extrema (+3 días, Activos/Iniciados)", ant_extrema, delta="Críticos" if ant_extrema > 0 else None, delta_color="inverse")
+        # col4, col5, col6 = st.columns(3)
+        # col4.metric("🆕 Tickets Hoy (Activos/Iniciados)", ant_0)
+        # col5.metric("📅 Antigüedad 3 días (Activos/Iniciados)", ant_3)
+        # col6.metric("⚠️ Antigüedad Extrema (+3 días, Activos/Iniciados)", ant_extrema, delta="Críticos" if ant_extrema > 0 else None, delta_color="inverse")
 
         st.markdown("---")
         st.subheader("🗂️ Tabla de Tickets (Estado más reciente)")
@@ -1045,22 +1159,22 @@ elif menu == "🎯 Citas Puntuales":
 
     required_cols_citas = ['Prioridad', 'Vence', 'Estado', 'OrdenExterna']
     if df_unicos is not None and not df_unicos.empty and all(col in df_unicos.columns for col in required_cols_citas):
-         if 'Vence' in df_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_unicos['Vence']):
-             df_citas_base = df_unicos.dropna(subset=['Vence']).copy()
-             mask_prioridad = df_citas_base['Prioridad'].astype(str) == '100'
-             mask_vencimiento_orig = df_citas_base.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str).str.lower() == 'vencida'
-             mask_vence_hoy = df_citas_base['Vence'].dt.normalize() == hoy
-             df_citas_actuales = df_citas_base[mask_prioridad & mask_vencimiento_orig & mask_vence_hoy]
+        if 'Vence' in df_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_unicos['Vence']):
+            df_citas_base = df_unicos.dropna(subset=['Vence']).copy()
+            mask_prioridad = df_citas_base['Prioridad'].astype(str) == '100'
+            mask_vencimiento_orig = df_citas_base.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str).str.lower() == 'vencida'
+            mask_vence_hoy = df_citas_base['Vence'].dt.normalize() == hoy
+            df_citas_actuales = df_citas_base[mask_prioridad & mask_vencimiento_orig & mask_vence_hoy]
 
-         estados_gestionados = ['pendiente de calendarizacion', 'calendarizado']
-         candidatos = df_unicos[df_unicos['Estado'].astype(str).isin(estados_gestionados)]['OrdenExterna'].unique()
+        estados_gestionados = ['pendiente de calendarizacion', 'calendarizado']
+        candidatos = df_unicos[df_unicos['Estado'].astype(str).isin(estados_gestionados)]['OrdenExterna'].unique()
 
-         # Usar 'df' (historial completo del día) para buscar
-         required_hist_cols = ['OrdenExterna', 'Vence', 'Prioridad', 'OE_Vencimiento_Original']
-         if len(candidatos) > 0 and df is not None and not df.empty and all(c in df.columns for c in required_hist_cols) and pd.api.types.is_datetime64_any_dtype(df['Vence']):
-             historial_candidatos = df[df['OrdenExterna'].isin(candidatos)].copy()
+        # Usar 'df' (historial completo del día) para buscar
+        required_hist_cols = ['OrdenExterna', 'Vence', 'Prioridad', 'OE_Vencimiento_Original']
+        if len(candidatos) > 0 and df is not None and not df.empty and all(c in df.columns for c in required_hist_cols) and pd.api.types.is_datetime64_any_dtype(df['Vence']):
+            historial_candidatos = df[df['OrdenExterna'].isin(candidatos)].copy()
 
-             if not historial_candidatos.empty:
+            if not historial_candidatos.empty:
                 prioridad_str = historial_candidatos.get('Prioridad', pd.Series(dtype=str)).fillna('').astype(str)
                 venc_orig_str = historial_candidatos.get('OE_Vencimiento_Original', pd.Series(dtype=str)).fillna('').astype(str).str.lower()
                 historial_candidatos['Vence'] = pd.to_datetime(historial_candidatos['Vence'], errors='coerce')
@@ -1073,7 +1187,7 @@ elif menu == "🎯 Citas Puntuales":
                 ]
                 tickets_gestionados_ids.update(cumplen_historico['OrdenExterna'].unique())
 
-         if tickets_gestionados_ids:
+        if tickets_gestionados_ids:
             df_citas_historicas = df_unicos[df_unicos['OrdenExterna'].isin(tickets_gestionados_ids)]
 
     if df_citas_actuales.empty and not df_citas_historicas.empty:
@@ -1082,16 +1196,16 @@ elif menu == "🎯 Citas Puntuales":
         df_citas_historicas = pd.DataFrame(columns=df_citas_actuales.columns)
 
     if not df_citas_actuales.empty or not df_citas_historicas.empty:
-         try:
-             cols = df_citas_actuales.columns.union(df_citas_historicas.columns)
-             df_citas_actuales = df_citas_actuales.reindex(columns=cols)
-             df_citas_historicas = df_citas_historicas.reindex(columns=cols)
-             df_citas = pd.concat([df_citas_actuales, df_citas_historicas]).drop_duplicates(subset=['OrdenExterna'], keep='first')
-         except Exception as e:
-              st.error(f"Error al combinar datos de citas: {e}")
-              df_citas = df_citas_actuales if not df_citas_actuales.empty else df_citas_historicas
+        try:
+            cols = df_citas_actuales.columns.union(df_citas_historicas.columns)
+            df_citas_actuales = df_citas_actuales.reindex(columns=cols)
+            df_citas_historicas = df_citas_historicas.reindex(columns=cols)
+            df_citas = pd.concat([df_citas_actuales, df_citas_historicas]).drop_duplicates(subset=['OrdenExterna'], keep='first')
+        except Exception as e:
+            st.error(f"Error al combinar datos de citas: {e}")
+            df_citas = df_citas_actuales if not df_citas_actuales.empty else df_citas_historicas
     else:
-         df_citas = pd.DataFrame()
+        df_citas = pd.DataFrame()
 
 
     render_dashboard_page(
@@ -1177,7 +1291,7 @@ elif menu == "🔍 Tracking Ticket":
                         elif es_pyme:
                             st.markdown("<div style='text-align: center; background-color: #32CD32; color: white; padding: 8px; border-radius: 5px; font-weight: bold;'>⏱️ En Tiempo</div>", unsafe_allow_html=True)
                         else:
-                             st.markdown("<div style='text-align: center; padding: 8px; border-radius: 5px; font-weight: bold; background-color: #2a2a4a;'>📊 Normal</div>", unsafe_allow_html=True)
+                            st.markdown("<div style='text-align: center; padding: 8px; border-radius: 5px; font-weight: bold; background-color: #2a2a4a;'>📊 Normal</div>", unsafe_allow_html=True)
 
                     st.markdown("---")
                     col_main1, col_main2 = st.columns(2)
@@ -1225,7 +1339,7 @@ elif menu == "🔍 Tracking Ticket":
                                         minutos_vencidos = int((tiempo_vencido.total_seconds() % 3600) // 60)
                                         timeline_info["🚨 Tiempo Vencido"] = f"{horas_vencidas}h {minutos_vencidos}m"
                                 except Exception as e:
-                                     timeline_info["⚠️ Error Cálculo Tiempo"] = "Verificar Fechas"
+                                    timeline_info["⚠️ Error Cálculo Tiempo"] = "Verificar Fechas"
 
                         for campo, valor in timeline_info.items():
                             if "Vencido" in campo and "🚨" in campo:
@@ -1267,9 +1381,9 @@ elif menu == "🔍 Tracking Ticket":
         tickets_recientes = pd.DataFrame()
         # Usar df (historial completo del día) para mostrar los últimos *cambios*
         if df is not None and not df.empty and 'Timestamp_Procesado' in df.columns and pd.api.types.is_datetime64_any_dtype(df['Timestamp_Procesado']):
-             tickets_recientes = df.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
+            tickets_recientes = df.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
         elif df is not None and not df.empty: # Fallback si no hay timestamp
-             tickets_recientes = df.tail(10)
+            tickets_recientes = df.tail(10)
 
 
         if not tickets_recientes.empty:
@@ -1299,17 +1413,17 @@ elif menu == "📅 Antiguas":
 
     df_unicos_antiguedad = pd.DataFrame()
     if df_unicos is not None and not df_unicos.empty and 'OE_Creacion' in df_unicos.columns:
-         df_copy = df_unicos.copy()
-         if not pd.api.types.is_datetime64_any_dtype(df_copy['OE_Creacion']):
-             df_copy['OE_Creacion'] = pd.to_datetime(df_copy['OE_Creacion'], errors='coerce')
-         df_unicos_antiguedad = df_copy.dropna(subset=['OE_Creacion'])
+        df_copy = df_unicos.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df_copy['OE_Creacion']):
+            df_copy['OE_Creacion'] = pd.to_datetime(df_copy['OE_Creacion'], errors='coerce')
+        df_unicos_antiguedad = df_copy.dropna(subset=['OE_Creacion'])
 
     with tab1:
         fecha_objetivo = hoy - timedelta(days=3)
         df_3_dias = pd.DataFrame()
         if not df_unicos_antiguedad.empty:
-             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
-                 df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
+            if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
+                df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
 
         render_dashboard_page(
             title_prefix="Antigüedad 3 Días",
@@ -1326,8 +1440,8 @@ elif menu == "📅 Antiguas":
         fecha_limite = hoy - timedelta(days=3)
         df_extrema = pd.DataFrame()
         if not df_unicos_antiguedad.empty:
-             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
-                 df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
+            if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
+                df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
 
         render_dashboard_page(
             title_prefix="Antigüedad Extrema",
@@ -1371,8 +1485,8 @@ elif menu == "📈 Rendimiento":
                     (df_rendimiento_base['OE_Creacion'] <= fecha_fin_dt)
                 ].copy()
             else:
-                 st.error("La fecha de inicio no puede ser posterior a la fecha de fin.")
-                 df_rendimiento = pd.DataFrame()
+                st.error("La fecha de inicio no puede ser posterior a la fecha de fin.")
+                df_rendimiento = pd.DataFrame()
 
         except Exception as e:
             st.error(f"Error al procesar fechas para Rendimiento: {e}")
