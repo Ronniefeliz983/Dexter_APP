@@ -673,13 +673,15 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # NUEVAS FUNCIONES DE RENDERIZADO (KPIs, Tabla Detalle)
 # ------------------------------------
 
-def display_kpi_metrics(kpis, critical_metric_key=None, critical_delta_text="Críticos"):
-    """Muestra la cuadrícula de KPIs, con opción de marcar una métrica como crítica."""
-    # MODIFICADO: Añadidos KPIs Total_Iniciado y Eficiencia_Inicial.
-    # Layout cambiado a 2 filas de 5.
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
+# --- MODIFICADO: Esta función ahora es CONDICIONAL ---
+def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
+    """
+    Muestra la cuadrícula de KPIs.
+    - Muestra 10 KPIs en la página 'principal'.
+    - Muestra 8 KPIs en las demás páginas.
+    """
 
+    # --- Helper function, interna a la principal ---
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
         value_to_display = kpis.get(key, 0)
         if not isinstance(value_to_display, (int, float)): value_to_display = 0
@@ -690,42 +692,77 @@ def display_kpi_metrics(kpis, critical_metric_key=None, critical_delta_text="Cr�
             col.metric(label, value_to_display)
         else:
             col.metric(label, value_to_display)
+    # --- Fin del Helper ---
 
-    if st.session_state.user_role == "admin":
-        # Fila 1
-        metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
-        metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-        metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
-        metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
-        metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
-
-        # Fila 2
-        col6, col7, col8, col9, col10 = st.columns(5)
-        eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
-        col6.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
-        eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
-        col7.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
-        metric_with_critical(col8, "📤 Referidos", 'Referidos')
-        metric_with_critical(col9, "📅 Citados", 'Citados')
-        metric_with_critical(col10, "✔️ Validados (Int)", 'Validados')
+    # --- VISTA PARA PÁGINA PRINCIPAL (10 KPIs) ---
+    if page_key == "principal":
+        col1, col2, col3, col4, col5 = st.columns(5)
         
-    else: # Vista Gerencia / Supervisor
-        # Fila 1
-        metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
-        metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-        metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
-        metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
-        metric_with_critical(col5, "📤 Referidos", 'Referidos')
+        if st.session_state.user_role == "admin":
+            # Fila 1
+            metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
+            metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
 
-        # Fila 2
-        col6, col7, col8, col9, col10 = st.columns(5)
-        metric_with_critical(col6, "📅 Citados", 'Citados')
-        metric_with_critical(col7, "✔️ Validados (Int)", 'Validados')
-        metric_with_critical(col8, "🔄 Total Manejado", 'Manejados')
-        eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
-        col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
-        eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
-        col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+            # Fila 2
+            col6, col7, col8, col9, col10 = st.columns(5)
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col6.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
+            eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
+            col7.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+            metric_with_critical(col8, "📤 Referidos", 'Referidos')
+            metric_with_critical(col9, "📅 Citados", 'Citados')
+            metric_with_critical(col10, "✔️ Validados (Int)", 'Validados')
+            
+        else: # Vista Gerencia / Supervisor en 'Principal'
+            # Fila 1
+            metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
+            metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col5, "📤 Referidos", 'Referidos')
+
+            # Fila 2
+            col6, col7, col8, col9, col10 = st.columns(5)
+            metric_with_critical(col6, "📅 Citados", 'Citados')
+            metric_with_critical(col7, "✔️ Validados (Int)", 'Validados')
+            metric_with_critical(col8, "🔄 Total Manejado", 'Manejados')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
+            eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
+            col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+            
+    # --- VISTA PARA OTRAS PÁGINAS (8 KPIs) ---
+    else: 
+        col1, col2, col3, col4 = st.columns(4)
+        
+        if st.session_state.user_role == "admin":
+            metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+            metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+
+            col5, col6, col7, col8 = st.columns(4)
+            metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            metric_with_critical(col6, "📤 Referidos", 'Referidos')
+            metric_with_critical(col7, "📅 Citados", 'Citados')
+            metric_with_critical(col8, "✔️ Validados (Int)", 'Validados')
+            
+        else: # Gerencia / Supervisor en otras páginas
+            metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col4, "📤 Referidos", 'Referidos')
+
+            col5, col6, col7, col8 = st.columns(4)
+            metric_with_critical(col5, "📅 Citados", 'Citados')
+            metric_with_critical(col6, "✔️ Validados (Int)", 'Validados')
+            metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
 
 
 def display_detail_table(df_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix):
@@ -782,23 +819,32 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         total_tickets_admin = kpis.get('Total', 0)
         pendientes_admin_kpi = kpis.get('Pendientes', 0)
         cerrados_admin = kpis.get('Cerrados', 0)
-        manejados_kpi_admin = kpis.get('Manejados', 0) # 'Manejados' ya incluye cerrados, ref, cit, val
-        
-        # MODIFICADO: Nombres y nuevos KPIs
+        manejados_kpi_admin = kpis.get('Manejados', 0)
         eficiencia_kpi_admin = kpis.get('Eficiencia_Total_%', 0.0)
         total_iniciado_admin = kpis.get('Total_Iniciado', 0)
         eficiencia_inicial_admin = kpis.get('Eficiencia_Inicial', 0.0)
 
-        st.subheader("📊 Resumen General (Todos los Supervisores)")
-        # MODIFICADO: Layout de 7 columnas para incluir los nuevos KPIs
-        col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
-        col_kpi1.metric("Total tickets", total_tickets_admin)
-        col_kpi2.metric("Eficiencia Total", f"{eficiencia_kpi_admin:.1f}%")
-        col_kpi3.metric("Total Iniciado", total_iniciado_admin)
-        col_kpi4.metric("Eficiencia Inicial", f"{eficiencia_inicial_admin:.1f}%")
-        col_kpi5.metric("Cerrados", cerrados_admin)
-        col_kpi6.metric("Pendiente", pendientes_admin_kpi)
-        col_kpi7.metric("Manejados", manejados_kpi_admin)
+        # --- MODIFICADO: Layout de KPIs condicional por página ---
+        if page_key == "principal":
+            st.subheader("📊 Resumen General (Todos los Supervisores)")
+            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
+            col_kpi1.metric("Total tickets", total_tickets_admin)
+            col_kpi2.metric("Eficiencia Total", f"{eficiencia_kpi_admin:.1f}%")
+            col_kpi3.metric("Total Iniciado", total_iniciado_admin)
+            col_kpi4.metric("Eficiencia Inicial", f"{eficiencia_inicial_admin:.1f}%")
+            col_kpi5.metric("Cerrados", cerrados_admin)
+            col_kpi6.metric("Pendiente", pendientes_admin_kpi)
+            col_kpi7.metric("Manejados", manejados_kpi_admin)
+        else: # Vista Admin en otras páginas (PYMEs, Antiguas, etc.)
+            st.subheader("📊 Resumen General (Filtro Actual)")
+            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
+            col_kpi1.metric("Total tickets", total_tickets_admin)
+            col_kpi2.metric("Eficiencia", f"{eficiencia_kpi_admin:.1f}%")
+            col_kpi3.metric("Cerrados", cerrados_admin)
+            col_kpi4.metric("Pendiente", pendientes_admin_kpi)
+            col_kpi5.metric("Manejados", manejados_kpi_admin)
+        # --- FIN DE LA MODIFICACIÓN ---
+
 
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
@@ -907,7 +953,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
     # --- Vista Gerencia ---
     elif role == "gerencia":
-        display_kpi_metrics(kpis, critical_metric_key)
+        # MODIFICADO: Pasa el page_key
+        display_kpi_metrics(kpis, page_key, critical_metric_key)
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor')
@@ -929,7 +976,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
     # --- Vista Supervisor / Supervisor_Old ---
     else:
-        display_kpi_metrics(kpis, critical_metric_key)
+        # MODIFICADO: Pasa el page_key
+        display_kpi_metrics(kpis, page_key, critical_metric_key)
         st.markdown("---")
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
         titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
@@ -1038,35 +1086,16 @@ if menu == "🏠 Principal":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="principal"
+            page_key="principal" # MODIFICADO: Pasa la clave de la página
         )
     else: # Vista Supervisor/Supervisor_Old
-        
-        # --- CORRECCIÓN: Bloque de cálculo manual eliminado ---
-        # Ese bloque contenía el error 'df_antigad' y era redundante.
-        
-        # --- MODIFICADO: Llamar a display_kpi_metrics para unificar la vista ---
-        # (La vista de Admin/Gerencia en 'Principal' es manejada por render_dashboard_page)
-        # (La vista de Supervisor en 'Principal' usa kpis personalizados O display_kpi_metrics)
-        # -> Vamos a unificarla para que Supervisor vea los mismos KPIs que Gerencia
         
         # Calcular KPIs para el Supervisor
         kpis_supervisor = calcular_kpis(df_unicos, df)
         
-        # Mostrar los KPIs unificados
-        display_kpi_metrics(kpis_supervisor, critical_metric_key='Pendientes')
+        # MODIFICADO: Pasa page_key="principal" para mostrar los 10 KPIs
+        display_kpi_metrics(kpis_supervisor, page_key="principal", critical_metric_key='Pendientes')
         
-        # Quitar las métricas antiguas de 6 columnas (comentadas)
-        # col1, col2, col3 = st.columns(3)
-        # col1.metric("🎫 Tickets Activos/Iniciados", activos_iniciados)
-        # col2.metric("⏰ Puntuales (Activos/Iniciados)", puntuales)
-        # col3.metric("🏢 Total PYMEs (Todos los estados)", pymes)
-
-        # col4, col5, col6 = st.columns(3)
-        # col4.metric("🆕 Tickets Hoy (Activos/Iniciados)", ant_0)
-        # col5.metric("📅 Antigüedad 3 días (Activos/Iniciados)", ant_3)
-        # col6.metric("⚠️ Antigüedad Extrema (+3 días, Activos/Iniciados)", ant_extrema, delta="Críticos" if ant_extrema > 0 else None, delta_color="inverse")
-
         st.markdown("---")
         st.subheader("🗂️ Tabla de Tickets (Estado más reciente)")
 
@@ -1096,7 +1125,7 @@ elif menu == "📊 Análisis PYMEs":
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel,
         status_filter=estatus_sel,
-        page_key="pymes"
+        page_key="pymes" # MODIFICADO: Pasa la clave de la página
     )
 
 elif menu == "⏰ Puntualidad":
@@ -1119,7 +1148,7 @@ elif menu == "⏰ Puntualidad":
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel,
         status_filter=estatus_sel,
-        page_key="puntualidad"
+        page_key="puntualidad" # MODIFICADO: Pasa la clave de la página
     )
 
 elif menu == "🎯 Citas Puntuales":
@@ -1189,7 +1218,7 @@ elif menu == "🎯 Citas Puntuales":
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel,
         status_filter=estatus_sel,
-        page_key="citas"
+        page_key="citas" # MODIFICADO: Pasa la clave de la página
     )
 
 elif menu == "🔍 Tracking Ticket":
@@ -1406,7 +1435,7 @@ elif menu == "📅 Antiguas":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="antiguas_3_dias"
+            page_key="antiguas_3_dias" # MODIFICADO: Pasa la clave de la página
         )
 
     with tab2:
@@ -1424,7 +1453,7 @@ elif menu == "📅 Antiguas":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="antiguas_extrema",
+            page_key="antiguas_extrema", # MODIFICADO: Pasa la clave de la página
             critical_metric_key='Total'
         )
 
@@ -1476,5 +1505,5 @@ elif menu == "📈 Rendimiento":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="rendimiento"
+            page_key="rendimiento" # MODIFICADO: Pasa la clave de la página
         )
