@@ -1041,36 +1041,9 @@ if menu == "🏠 Principal":
             page_key="principal"
         )
     else: # Vista Supervisor/Supervisor_Old
-        df_activos_unicos = pd.DataFrame()
-        activos_iniciados = 0
-        pymes = 0
-        puntuales = 0
-        ant_0 = 0
-        ant_3 = 0
-        ant_extrema = 0
-
-        if df_unicos is not None and not df_unicos.empty:
-            if 'Estado' in df_unicos.columns:
-                df_activos_unicos = df_unicos[df_unicos['Estado'].astype(str).isin(['activo', 'iniciado'])]
-                activos_iniciados = df_activos_unicos.shape[0]
-            if 'Es_PYME_Negocio' in df_unicos.columns:
-                pymes = df_unicos[df_unicos['Es_PYME_Negocio'] == True].shape[0]
-
-            hoy = pd.Timestamp.now().normalize()
-
-            if 'OE_Vencimiento' in df_activos_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_activos_unicos['OE_Vencimiento']):
-                mask_fecha = df_activos_unicos['OE_Vencimiento'].dt.normalize() == hoy
-                oe_venc_orig_str = df_activos_unicos.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str)
-                mask_texto = oe_venc_orig_str.str.lower() == 'hoy'
-                puntuales = df_activos_unicos[mask_fecha | mask_texto].shape[0]
-
-            if 'OE_Creacion' in df_activos_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_activos_unicos['OE_Creacion']):
-                df_antiguedad = df_activos_unicos.dropna(subset=['OE_Creacion'])
-                ant_0 = df_antiguedad[df_antiguedad['OE_Creacion'].dt.normalize() == hoy].shape[0]
-                fecha_3_dias = hoy - timedelta(days=3)
-                ant_3 = df_antiguedad[df_antiguedad['OE_Creacion'].dt.normalize() == fecha_3_dias].shape[0]
-                fecha_limite_ant = hoy - timedelta(days=3)
-                ant_extrema = df_antigad[df_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite_ant].shape[0]
+        
+        # --- CORRECCIÓN: Bloque de cálculo manual eliminado ---
+        # Ese bloque contenía el error 'df_antigad' y era redundante.
         
         # --- MODIFICADO: Llamar a display_kpi_metrics para unificar la vista ---
         # (La vista de Admin/Gerencia en 'Principal' es manejada por render_dashboard_page)
@@ -1083,7 +1056,7 @@ if menu == "🏠 Principal":
         # Mostrar los KPIs unificados
         display_kpi_metrics(kpis_supervisor, critical_metric_key='Pendientes')
         
-        # Quitar las métricas antiguas de 6 columnas
+        # Quitar las métricas antiguas de 6 columnas (comentadas)
         # col1, col2, col3 = st.columns(3)
         # col1.metric("🎫 Tickets Activos/Iniciados", activos_iniciados)
         # col2.metric("⏰ Puntuales (Activos/Iniciados)", puntuales)
