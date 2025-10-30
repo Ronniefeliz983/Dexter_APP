@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: dashboard-claro
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "streamlit run app.py"
+    envVars:
+      - key: DATABASE_URL
+        sync: false  # Debes agregarla manualmente
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: STREAMLIT_SERVER_PORT
+        value: 10000
+      - key: STREAMLIT_SERVER_ADDRESS
+        value: 0.0.0.0
+      - key: STREAMLIT_SERVER_HEADLESS
+        value: true
+    autoDeploy: false  # Cambiar a true si quieres auto-deploy
+    plan: free  # Plan gratuito
