@@ -126,47 +126,56 @@ def calcular_vencido(row):
 
 # --- NUEVA FUNCIÓN CACHEADA (REEMPLAZA la anterior) ---
 @st.cache_data(ttl=300) # Cachear por 5 minutos
-def get_earliest_snapshot_initial_cohort(df_full_historial):
+def get_earliest_batch_initial_cohort(df_full_historial):
     """
-    Identifica los tickets que estaban 'activo' o 'iniciado' en el momento
-    exacto del *primer* timestamp registrado en todo el historial del día.
+    Identifica los tickets que estaban 'activo' o 'iniciado' en el
+    *primer lote procesado* (lote_procesado == min) del día.
     Devuelve un set de IDs (OrdenExterna).
     """
+    
+    # 1. Validar que los datos y las columnas necesarias existan
     if (df_full_historial is None or df_full_historial.empty or
         'OrdenExterna' not in df_full_historial.columns or
         'Estado' not in df_full_historial.columns or
-        'Timestamp_Procesado' not in df_full_historial.columns or
-        not pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado'])):
-        # st.warning("Historial inválido para cohort inicial.") # Debug
+        'lote_procesado' not in df_full_historial.columns): # <-- NUEVO: Chequear por 'lote_procesado'
+        # st.warning("Historial inválido o falta 'lote_procesado' para cohort inicial.") # Debug
         return set() # Devuelve un set vacío si los datos no son válidos
 
     try:
-        # 1. Encontrar el timestamp más antiguo en TODO el historial
-        min_timestamp = df_full_historial['Timestamp_Procesado'].min()
+        # 2. Asegurar que 'lote_procesado' es numérico y encontrar el mínimo
+        # Esto es importante si viene como texto ('1', '2', etc.)
+        lotes_numericos = pd.to_numeric(df_full_historial['lote_procesado'], errors='coerce')
         
-        if pd.isna(min_timestamp):
-            # st.warning("No se encontró timestamp mínimo.") # Debug
+        if lotes_numericos.isna().all():
+            # st.warning("La columna 'lote_procesado' no contiene valores numéricos válidos.") # Debug
+            return set()
+            
+        min_lote = lotes_numericos.min() # <-- NUEVA LÓGICA: Encontrar el lote mínimo
+        
+        if pd.isna(min_lote):
+            # st.warning("No se encontró un 'lote_procesado' mínimo.") # Debug
             return set()
 
-        # 2. Obtener el "snapshot" exacto de ese primer momento
-        df_earliest_snapshot = df_full_historial[df_full_historial['Timestamp_Procesado'] == min_timestamp]
+        # 3. Obtener el "snapshot" exacto de ese *primer lote*
+        # Comparamos la columna numérica con el mínimo encontrado
+        df_earliest_batch = df_full_historial[lotes_numericos == min_lote].copy() # <-- NUEVA LÓGICA
         
-        if df_earliest_snapshot.empty:
-            # st.warning("Snapshot vacío.") # Debug
+        if df_earliest_batch.empty:
+            # st.warning(f"Snapshot vacío para lote {min_lote}.") # Debug
             return set()
 
-        # 3. De ese snapshot, filtrar los que estaban 'activo' o 'iniciado'
-        df_initial_active_in_snapshot = df_earliest_snapshot[
-            df_earliest_snapshot['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+        # 4. De ese snapshot, filtrar los que estaban 'activo' o 'iniciado'
+        df_initial_active_in_snapshot = df_earliest_batch[
+            df_earliest_batch['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
         ]
         
-        # 4. Devolver los IDs únicos de ese grupo inicial global
+        # 5. Devolver los IDs únicos de ese grupo inicial global
         initial_cohort_ids = set(df_initial_active_in_snapshot['OrdenExterna'].unique())
-        # st.info(f"Cohorte inicial global: {len(initial_cohort_ids)} tickets") # Debug
+        # st.info(f"Cohorte inicial global (Lote {min_lote}): {len(initial_cohort_ids)} tickets") # Debug
         return initial_cohort_ids
         
     except Exception as e:
-        st.error(f"Error en get_earliest_snapshot_initial_cohort: {e}") # Debug
+        st.error(f"Error en get_earliest_batch_initial_cohort: {e}") # Debug
         return set()
 
 
@@ -203,8 +212,9 @@ def calcular_kpis(df, df_full_historial):
     manejados_inicial_en_pagina = 0
     eficiencia_inicial = 0.0
 
-    # 1. Obtener el "grupo" global de IDs del *primer snapshot*
-    global_initial_cohort_ids = get_earliest_snapshot_initial_cohort(df_full_historial)
+    # 1. Obtener el "grupo" global de IDs del *primer LOTE*
+    # global_initial_cohort_ids = get_earliest_snapshot_initial_cohort(df_full_historial) # <-- LÍNEA ANTIGUA
+    global_initial_cohort_ids = get_earliest_batch_initial_cohort(df_full_historial) # <-- LÍNEA NUEVA
 
     if global_initial_cohort_ids: # Solo proceder si el cohort global no está vacío
         try:
@@ -300,7 +310,7 @@ def get_database_engine():
         return None
 
 # --------------------------
-# Mapeo de Columnas (Sin cambios)
+# Mapeo de Columnas (MODIFICADO)
 # --------------------------
 
 def get_column_mappings():
@@ -317,6 +327,11 @@ def get_column_mappings():
         'ciudad': 'Ciudad', 'sector': 'Sector', 'barrio': 'Barrio', 'cabina': 'Cabina', 'terminal': 'Terminal',
         'cantidad_de_lineas': 'Cantidad_de_lineas', 're_digitada': 'Re_Digitada', 'timestamp_procesado': 'Timestamp_Procesado',
         'fuente_paso': 'Fuente_Paso', 'tipo_evento': 'Tipo_Evento',
+        
+        # --- AÑADIDO POR SOLICITUD ---
+        'lote_procesado': 'lote_procesado', # Mapea 'lote_procesado' (SQL) a 'lote_procesado' (Pandas)
+        # ---------------------------
+        
         # Ignorar columnas de DB que no usa el dashboard
         'id': None, 'fecha_actualizacion': None, 'fecha_registro': None
     }
@@ -560,8 +575,8 @@ def crear_resumen_admin(df, agrupar_por='Supervisor'):
 
     resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Validados_Int']
     resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
-                                          round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
-                                          0.0)
+                                         round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+                                         0.0)
     
     # --- NUEVO: Añadir fila de TOTAL ---
     if not resumen.empty:
@@ -961,7 +976,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         )
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                                xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                                                   xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
                         st.plotly_chart(fig_vencidos, use_container_width=True)
                     else:
                         st.info("No hay PYMEs vencidas para mostrar en este desglose con los filtros actuales.")
@@ -1294,7 +1309,7 @@ elif menu == "🔍 Tracking Ticket":
 
             for orden_externa in df_track['OrdenExterna'].unique():
                 ts_col_valid_track = ('Timestamp_Procesado' in df_track.columns and
-                                    pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
+                                      pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
 
                 if ts_col_valid_track:
                     historial_ticket = df_track[df_track['OrdenExterna'] == orden_externa].sort_values('Timestamp_Procesado', ascending=False, na_position='last')
@@ -1543,4 +1558,3 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" # MODIFICADO: Pasa la clave de la página
         )
-
