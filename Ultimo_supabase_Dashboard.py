@@ -90,19 +90,22 @@ def get_database_engine():
     """Pool de conexiones optimizado"""
     DATABASE_URL = None
     
-    # 1. INTENTAR PRIMERO CON VARIABLES DE ENTORNO (para Render)
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Primero, intenta obtener la variable de entorno (usada por Render y Streamlit Cloud)
     DATABASE_URL = os.environ.get("DATABASE_URL")
     
-    # 2. SI NO EXISTE (ej. desarrollo local), USAR st.secrets
+    # Si no la encuentra (ej. corriendo localmente), intenta con st.secrets
     if not DATABASE_URL:
         try:
             DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
         except:
             DATABASE_URL = None # No se encontró en ningún lado
+    # --- FIN DE LA MODIFICACIÓN ---
 
-    # 3. VERIFICACIÓN FINAL
+    # Verificación final
     if not DATABASE_URL:
-        st.error("⚠️ No se encontró la DATABASE_URL. Asegúrate de configurarla en Render (Environment) o localmente (secrets.toml)")
+        st.error("⚠️ No se encontró la DATABASE_URL. Asegúrate de configurarla en los 'Secrets' de Streamlit Cloud.")
+        st.stop() # Detiene la ejecución si no hay base de datos
         return None
     
     engine = create_engine(
@@ -348,11 +351,11 @@ def cargar_datos():
                     es_negocio = df.get('Tipo_Cliente', pd.Series(dtype=str)) == 'negocio'
                     df['PYME'] = df['PYME'].fillna(False).astype(bool)
                     df['Es_PYME_Negocio'] = df['PYME'] & es_negocio
-                else:
-                    df['PYME'] = False
-                    df['Vence en'] = pd.NaT
-                    df['Vencido'] = False
-                    df['Es_PYME_Negocio'] = False
+            else:
+                df['PYME'] = False
+                df['Vence en'] = pd.NaT
+                df['Vencido'] = False
+                df['Es_PYME_Negocio'] = False
 
             if 'Vencido' not in df.columns:
                 df['Vencido'] = False
@@ -361,11 +364,10 @@ def cargar_datos():
             
             # --- MENSAJE DE ÉXITO ELIMINADO ---
             # st.success(f"✅ {len(df):,} registros en {timer.time() - start_time:.2f}s")
-            
             return df
             
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f"❌ Error al cargar datos: {e}") # Error más descriptivo
         return pd.DataFrame()
 
 # ====================================
@@ -393,7 +395,7 @@ def formatear_para_display(df_input):
     
     columnas_fechas = ['Creado', 'OE_Creacion', 'OE Vence', 'OE_Vencimiento', 'Vence en', 'Timestamp_Procesado']
     for col in df_display.columns.intersection(columnas_fechas):
-        if pd.api.types.is_datetime64_any_dtype(df_display[col]):
+        if pd.api.types.is_datetime6to_datetime_dtype(df_display[col]):
             df_display[col] = df_display[col].apply(lambda x: x.strftime('%d/%m/%Y %H:%M') if pd.notna(x) else None)
 
     if 'Vencido' in df_display.columns and df_display['Vencido'].dtype == 'bool':
@@ -729,7 +731,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     fig_venc = px.bar(resumen_venc.sort_values('Vencidas', ascending=False),
                                       x='Supervisor', y='Vencidas', text='Vencidas',
                                       color='Vencidas', color_continuous_scale='Reds')
-                    fig_venc.update_layout(template="plotly_dark", height=300)
+                    fig_venc.update_layout(template="plotly_dark", height=3D0)
                     st.plotly_chart(fig_venc, use_container_width=True)
 
             # Tabla resumen
@@ -848,7 +850,7 @@ if menu == "🏠 Principal":
         display_kpi_metrics(kpis, "principal", 'Pendientes')
         st.markdown("---")
         st.subheader("🗂️ Tabla de Tickets")
-        display_detail_table(df_unicos, df, st.session_state.user_role,
+        display_detail_table(df_img_path, df, st.session_state.user_role,
                              st.session_state.supervisor_id, supervisor_sel,
                              estatus_sel, "principal_sup", "principal")
 
@@ -884,7 +886,7 @@ elif menu == "🎯 Citas Puntuales":
     if all(col in df_unicos.columns for col in ['Prioridad', 'Vence', 'Estado', 'OrdenExterna']):
         df_base = df_unicos.dropna(subset=['Vence'])
         mask = (df_base['Prioridad'].astype(str) == '100') & \
-               (df_base.get('OE_Vencimiento_Original', pd.Series()).str.lower() == 'vencida') & \
+               (df_base.get('OE_Vencimiento_Original', pd.Series()).str.tr.lower() == 'vencida') & \
                (df_base['Vence'].dt.normalize() == hoy)
         df_citas = df_base[mask]
     
@@ -1018,7 +1020,7 @@ elif menu == "📈 Rendimiento":
         
         df_rendimiento = df_unicos[
             (df_unicos['OE_Creacion'] >= fecha_inicio_dt) &
-            (df_unicos['OE_Creacion'] <= fecha_fin_dt)
+            (df_unicos['OE_Creacion'] <= fecha_fin_dt)  # <-- ¡ERROR! Esta línea tiene un error.
         ]
     
     if df_rendimiento.empty:
