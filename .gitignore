@@ -1,9 +1,38 @@
-# Ignorar secretos de Streamlit
-.streamlit/secrets.toml
-
-# Ignorar archivos CSV de respaldo (si no quieres subirlos)
-*.csv
-
-# Ignorar archivos de Python
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Streamlit
+.streamlit/secrets.toml
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.csv
+*.xlsx
+*.json
+data/
+temp/
+cache/
+
+# Environment
+.env
+.env.local
