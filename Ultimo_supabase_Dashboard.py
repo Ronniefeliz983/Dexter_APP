@@ -124,7 +124,7 @@ def calcular_vencido(row):
         return False
 
 
-# --- NUEVA FUNCIÓN CACHEADA (REEMPLAZA la anterior) ---
+# --- NUEVA FUNCIÓN CACHEADA (BASADA EN LOTE_PROCESADO) ---
 @st.cache_data(ttl=300) # Cachear por 5 minutos
 def get_earliest_batch_initial_cohort(df_full_historial):
     """
@@ -137,28 +137,26 @@ def get_earliest_batch_initial_cohort(df_full_historial):
     if (df_full_historial is None or df_full_historial.empty or
         'OrdenExterna' not in df_full_historial.columns or
         'Estado' not in df_full_historial.columns or
-        'lote_procesado' not in df_full_historial.columns): # <-- NUEVO: Chequear por 'lote_procesado'
+        'lote_procesado' not in df_full_historial.columns): # <-- Chequear por 'lote_procesado'
         # st.warning("Historial inválido o falta 'lote_procesado' para cohort inicial.") # Debug
         return set() # Devuelve un set vacío si los datos no son válidos
 
     try:
         # 2. Asegurar que 'lote_procesado' es numérico y encontrar el mínimo
-        # Esto es importante si viene como texto ('1', '2', etc.)
         lotes_numericos = pd.to_numeric(df_full_historial['lote_procesado'], errors='coerce')
         
         if lotes_numericos.isna().all():
             # st.warning("La columna 'lote_procesado' no contiene valores numéricos válidos.") # Debug
             return set()
             
-        min_lote = lotes_numericos.min() # <-- NUEVA LÓGICA: Encontrar el lote mínimo
+        min_lote = lotes_numericos.min() # <-- LÓGICA: Encontrar el lote mínimo
         
         if pd.isna(min_lote):
             # st.warning("No se encontró un 'lote_procesado' mínimo.") # Debug
             return set()
 
         # 3. Obtener el "snapshot" exacto de ese *primer lote*
-        # Comparamos la columna numérica con el mínimo encontrado
-        df_earliest_batch = df_full_historial[lotes_numericos == min_lote].copy() # <-- NUEVA LÓGICA
+        df_earliest_batch = df_full_historial[lotes_numericos == min_lote].copy() # <-- LÓGICA
         
         if df_earliest_batch.empty:
             # st.warning(f"Snapshot vacío para lote {min_lote}.") # Debug
@@ -179,7 +177,7 @@ def get_earliest_batch_initial_cohort(df_full_historial):
         return set()
 
 
-# --- KPI Calculation Function (CORREGIDA OTRA VEZ) ---
+# --- KPI Calculation Function (MODIFICADA para REBOTE) ---
 def calcular_kpis(df, df_full_historial):
     """
     Calcula los nuevos KPIs de gestión, usando el cohort del primer snapshot.
@@ -189,7 +187,7 @@ def calcular_kpis(df, df_full_historial):
     # --- KPIs Estándar (basados en el estado actual/único) ---
     default_kpis = {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
-            'Validados': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
+            'Rebote': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0, # <-- CAMBIO A REBOTE
             'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0
         }
     if df is None or df.empty or 'Estado' not in df.columns or 'OrdenExterna' not in df.columns:
@@ -202,9 +200,9 @@ def calcular_kpis(df, df_full_historial):
     cerrados = df_kpi[df_kpi['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
     referidos = df_kpi[df_kpi['Estado'] == 'pend trab interno'].shape[0]
     citados = df_kpi[df_kpi['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-    validados = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0]
+    rebote = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0] # <-- CAMBIO A REBOTE
     pendientes = df_kpi[df_kpi['Estado'].isin(['activo', 'iniciado'])].shape[0]
-    manejados = cerrados + referidos + citados + validados
+    manejados = cerrados + referidos + citados + rebote # <-- CAMBIO A REBOTE
     eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
 
     # --- KPIs Nuevos (Total_Iniciado y Eficiencia_Inicial) ---
@@ -213,8 +211,7 @@ def calcular_kpis(df, df_full_historial):
     eficiencia_inicial = 0.0
 
     # 1. Obtener el "grupo" global de IDs del *primer LOTE*
-    # global_initial_cohort_ids = get_earliest_snapshot_initial_cohort(df_full_historial) # <-- LÍNEA ANTIGUA
-    global_initial_cohort_ids = get_earliest_batch_initial_cohort(df_full_historial) # <-- LÍNEA NUEVA
+    global_initial_cohort_ids = get_earliest_batch_initial_cohort(df_full_historial) # <-- Llama a la función de lote
 
     if global_initial_cohort_ids: # Solo proceder si el cohort global no está vacío
         try:
@@ -235,9 +232,9 @@ def calcular_kpis(df, df_full_historial):
                 cerrados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
                 referidos_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'pend trab interno'].shape[0]
                 citados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-                validados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'validacion int'].shape[0]
+                rebote_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'validacion int'].shape[0] # <-- CAMBIO A REBOTE
                 
-                manejados_inicial_en_pagina = cerrados_inicial + referidos_inicial + citados_inicial + validados_inicial
+                manejados_inicial_en_pagina = cerrados_inicial + referidos_inicial + citados_inicial + rebote_inicial # <-- CAMBIO A REBOTE
                 
                 # 6. Calcular Eficiencia_Inicial (Manejados de este grupo / Total de este grupo)
                 eficiencia_inicial = round(manejados_inicial_en_pagina * 100 / total_iniciado_en_pagina, 1)
@@ -253,7 +250,7 @@ def calcular_kpis(df, df_full_historial):
         'Cerrados': cerrados,
         'Referidos': referidos,
         'Citados': citados,
-        'Validados': validados, # Sigue siendo Validados (Int) basado en tu código anterior
+        'Rebote': rebote, # <-- CAMBIO A REBOTE
         'Pendientes': pendientes,
         'Manejados': manejados,
         'Eficiencia_Total_%': eficiencia_total,
@@ -310,7 +307,7 @@ def get_database_engine():
         return None
 
 # --------------------------
-# Mapeo de Columnas (MODIFICADO)
+# Mapeo de Columnas (MODIFICADO para lote_procesado)
 # --------------------------
 
 def get_column_mappings():
@@ -550,9 +547,9 @@ def to_excel(df: pd.DataFrame):
 
 def crear_resumen_admin(df, agrupar_por='Supervisor'):
     """Crea tabla de resumen para el rol de Administración."""
-    # MODIFICADO: Añade fila de TOTAL al final
+    # MODIFICADO: Añade fila de TOTAL al final y cambia a Rebote
     
-    cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Validados_Int', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']
+    cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%'] # <-- CAMBIO A REBOTE
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
 
@@ -569,11 +566,11 @@ def crear_resumen_admin(df, agrupar_por='Supervisor'):
         Cerrados=('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
         Referidos=('Estado', lambda x: (x == 'pend trab interno').sum()),
         Citados=('Estado', lambda x: x.isin(['pendiente de calendarizacion', 'calendarizado']).sum()),
-        Validados_Int=('Estado', lambda x: (x == 'validacion int').sum()),
+        Rebote=('Estado', lambda x: (x == 'validacion int').sum()), # <-- CAMBIO A REBOTE
         Pendientes=('Estado', lambda x: x.isin(['activo', 'iniciado']).sum())
     ).reset_index()
 
-    resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Validados_Int']
+    resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote'] # <-- CAMBIO A REBOTE
     resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
                                          round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
                                          0.0)
@@ -586,7 +583,7 @@ def crear_resumen_admin(df, agrupar_por='Supervisor'):
         total_row['Cerrados'] = resumen['Cerrados'].sum()
         total_row['Referidos'] = resumen['Referidos'].sum()
         total_row['Citados'] = resumen['Citados'].sum()
-        total_row['Validados_Int'] = resumen['Validados_Int'].sum()
+        total_row['Rebote'] = resumen['Rebote'].sum() # <-- CAMBIO A REBOTE
         total_row['Pendientes'] = resumen['Pendientes'].sum()
         total_row['Total Manejado'] = resumen['Total Manejado'].sum()
         
@@ -680,7 +677,7 @@ def get_color_estado(estado_str):
         return '#FFA500' # Naranja
     elif estado_str in ['activo', 'iniciado']:
         return '#1E90FF' # Azul Dodger
-    elif estado_str == 'validacion int':
+    elif estado_str == 'validacion int': # <-- Este sigue siendo el estado 'validacion int'
         return '#8A2BE2' # Azul Violeta
     else:
         return '#696969' # Gris oscuro para otros
@@ -724,7 +721,7 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # NUEVAS FUNCIONES DE RENDERIZADO (KPIs, Tabla Detalle)
 # ------------------------------------
 
-# --- MODIFICADO: Esta función ahora es CONDICIONAL ---
+# --- MODIFICADO: Esta función ahora es CONDICIONAL y usa REBOTE ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     """
     Muestra la cuadrícula de KPIs.
@@ -765,7 +762,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col7.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
             metric_with_critical(col8, "📤 Referidos", 'Referidos')
             metric_with_critical(col9, "📅 Citados", 'Citados')
-            metric_with_critical(col10, "✔️ Validados (Int)", 'Validados')
+            metric_with_critical(col10, "🔄 Rebote", 'Rebote') # <-- CAMBIO A REBOTE
             
         else: # Vista Gerencia / Supervisor en 'Principal'
             # Fila 1
@@ -778,7 +775,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             # Fila 2
             col6, col7, col8, col9, col10 = st.columns(5)
             metric_with_critical(col6, "📅 Citados", 'Citados')
-            metric_with_critical(col7, "✔️ Validados (Int)", 'Validados')
+            metric_with_critical(col7, "🔄 Rebote", 'Rebote') # <-- CAMBIO A REBOTE
             metric_with_critical(col8, "🔄 Total Manejado", 'Manejados')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
@@ -800,7 +797,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
             metric_with_critical(col6, "📤 Referidos", 'Referidos')
             metric_with_critical(col7, "📅 Citados", 'Citados')
-            metric_with_critical(col8, "✔️ Validados (Int)", 'Validados')
+            metric_with_critical(col8, "🔄 Rebote", 'Rebote') # <-- CAMBIO A REBOTE
             
         else: # Gerencia / Supervisor en otras páginas
             metric_with_critical(col1, "📋 Total", 'Total', critical_metric_key == 'Total')
@@ -810,7 +807,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
 
             col5, col6, col7, col8 = st.columns(4)
             metric_with_critical(col5, "📅 Citados", 'Citados')
-            metric_with_critical(col6, "✔️ Validados (Int)", 'Validados')
+            metric_with_critical(col6, "🔄 Rebote", 'Rebote') # <-- CAMBIO A REBOTE
             metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
@@ -1493,7 +1490,7 @@ elif menu == "📅 Antiguas":
         fecha_limite = hoy - timedelta(days=3)
         df_extrema = pd.DataFrame()
         if not df_unicos_antiguedad.empty:
-            if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
+            if pd.api.types.is_datetime64_any_dtype(df_unicos_antigad['OE_Creacion']):
                 df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
 
         render_dashboard_page(
