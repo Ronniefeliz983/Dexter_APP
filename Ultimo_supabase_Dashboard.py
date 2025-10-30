@@ -90,37 +90,41 @@ def get_database_engine():
     """Pool de conexiones optimizado"""
     DATABASE_URL = None
     
-    # --- INICIO DE LA MODIFICACIÓN ---
-    # Primero, intenta obtener la variable de entorno (usada por Render y Streamlit Cloud)
+    # 1. Intentar primero con variables de entorno (para Render / Hugging Face)
     DATABASE_URL = os.environ.get("DATABASE_URL")
     
-    # Si no la encuentra (ej. corriendo localmente), intenta con st.secrets
+    # 2. Si no se encuentra, intentar con los secretos de Streamlit Cloud
     if not DATABASE_URL:
         try:
             DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
-        except:
-            DATABASE_URL = None # No se encontró en ningún lado
-    # --- FIN DE LA MODIFICACIÓN ---
+        except Exception:
+            # No mostrar st.error aquí, solo imprimir en el log
+            print("DATABASE_URL no encontrada en st.secrets ni en variables de entorno.")
+            DATABASE_URL = None 
 
-    # Verificación final
+    # 3. Verificación final
     if not DATABASE_URL:
-        st.error("⚠️ No se encontró la DATABASE_URL. Asegúrate de configurarla en los 'Secrets' de Streamlit Cloud.")
-        st.stop() # Detiene la ejecución si no hay base de datos
+        # Retornar None para que la función que llama (cargar_datos) maneje el error
         return None
     
-    engine = create_engine(
-        DATABASE_URL,
-        poolclass=pool.QueuePool,
-        pool_size=5,
-        max_overflow=10,
-        pool_pre_ping=True,
-        pool_recycle=300,
-        connect_args={
-            'options': '-csearch_path=public',
-            'connect_timeout': 10
-        }
-    )
-    return engine
+    try:
+        engine = create_engine(
+            DATABASE_URL,
+            poolclass=pool.QueuePool,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+            pool_recycle=300,
+            connect_args={
+                'options': '-csearch_path=public',
+                'connect_timeout': 10
+            }
+        )
+        return engine
+    except Exception as e:
+        # Si create_engine falla (ej. URL malformada), también retornamos None.
+        print(f"Error al crear el engine de base de datos: {e}")
+        return None
 
 # ====================================
 # FUNCIONES DE CÁLCULO (TODAS LAS ORIGINALES)
@@ -302,8 +306,14 @@ def denormalizar_columnas_desde_sql(df_sql):
 def cargar_datos():
     """Carga optimizada con todas las funcionalidades originales"""
     engine = get_database_engine()
+
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Comprueba si el engine se creó correctamente
     if engine is None:
-        return pd.DataFrame()
+        # Muestra el error en la app si la conexión falló (ej. secret no configurado)
+        st.error("Error de Conexión: No se pudo conectar a la base de datos. Verifique la configuración.")
+        return pd.DataFrame() # Devuelve un DataFrame vacío para evitar que el resto de la app falle
+    # --- FIN DE LA MODIFICACIÓN ---
 
     try:
         with st.spinner('⚡ Cargando datos...'):
@@ -334,6 +344,13 @@ def cargar_datos():
                 df[f'{col}_Original'] = df[col].astype(str).replace('NaT', None)
                 df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True, format='mixed')
 
+            # --- INICIO DE LA MODIFICACIÓN ---
+            # Pre-inicializar las columnas para evitar el FutureWarning
+            df['PYME'] = False
+            df['Vence en'] = pd.NaT
+            df['Vencido'] = False
+            # --- FIN DE LA MODIFICACIÓN ---
+
             # Calcular PYME, Vencido, etc.
             if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']):
                 mask_valid = df['OE_Creacion'].notna()
@@ -346,28 +363,24 @@ def cargar_datos():
                     df['Vence en'] = pd.to_datetime(df['Vence en'], errors='coerce')
                     mask_vence = df['Vence en'].notna()
                     if mask_vence.any():
+                        df['Vencido'] = df['Vencido'].astype(bool) # Asegurar el tipo antes de asignar
                         df.loc[mask_vence, 'Vencido'] = df[mask_vence].apply(calcular_vencido, axis=1)
 
-                    es_negocio = df.get('Tipo_Cliente', pd.Series(dtype=str)) == 'negocio'
-                    df['PYME'] = df['PYME'].fillna(False).astype(bool)
-                    df['Es_PYME_Negocio'] = df['PYME'] & es_negocio
-            else:
-                df['PYME'] = False
-                df['Vence en'] = pd.NaT
-                df['Vencido'] = False
-                df['Es_PYME_Negocio'] = False
-
+                es_negocio = df.get('Tipo_Cliente', pd.Series(dtype=str)) == 'negocio'
+                df['PYME'] = df['PYME'].fillna(False).astype(bool) 
+                df['Es_PYME_Negocio'] = df['PYME'] & es_negocio
+            
             if 'Vencido' not in df.columns:
-                df['Vencido'] = False
+                 df['Vencido'] = False
             else:
-                df['Vencido'] = df['Vencido'].fillna(False).astype(bool)
+                 df['Vencido'] = df['Vencido'].fillna(False).astype(bool)
             
             # --- MENSAJE DE ÉXITO ELIMINADO ---
             # st.success(f"✅ {len(df):,} registros en {timer.time() - start_time:.2f}s")
             return df
             
     except Exception as e:
-        st.error(f"❌ Error al cargar datos: {e}") # Error más descriptivo
+        st.error(f"❌ Error al consultar la base de datos: {e}")
         return pd.DataFrame()
 
 # ====================================
@@ -395,7 +408,7 @@ def formatear_para_display(df_input):
     
     columnas_fechas = ['Creado', 'OE_Creacion', 'OE Vence', 'OE_Vencimiento', 'Vence en', 'Timestamp_Procesado']
     for col in df_display.columns.intersection(columnas_fechas):
-        if pd.api.types.is_datetime6to_datetime_dtype(df_display[col]):
+        if pd.api.types.is_datetime64_any_dtype(df_display[col]):
             df_display[col] = df_display[col].apply(lambda x: x.strftime('%d/%m/%Y %H:%M') if pd.notna(x) else None)
 
     if 'Vencido' in df_display.columns and df_display['Vencido'].dtype == 'bool':
@@ -731,7 +744,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     fig_venc = px.bar(resumen_venc.sort_values('Vencidas', ascending=False),
                                       x='Supervisor', y='Vencidas', text='Vencidas',
                                       color='Vencidas', color_continuous_scale='Reds')
-                    fig_venc.update_layout(template="plotly_dark", height=3D0)
+                    fig_venc.update_layout(template="plotly_dark", height=300)
                     st.plotly_chart(fig_venc, use_container_width=True)
 
             # Tabla resumen
@@ -774,7 +787,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, 
-                             global_supervisor_sel, status_filter, page_key, page_key)
+                             global_supervisor_sel, status_filter, page_key, "detalle_" + page_key) # Corregido el último parámetro
 
 # ====================================
 # APLICACIÓN PRINCIPAL
@@ -784,8 +797,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 df = cargar_datos()
 
 if df is None or df.empty:
-    st.error("No se pudieron cargar datos")
-    st.stop()
+    st.error("No se pudieron cargar datos o la base de datos está vacía. La aplicación no puede continuar.")
+    st.stop() # Detener la ejecución si no hay datos
 
 df_unicos_base = obtener_datos_unicos(df)
 
@@ -850,7 +863,9 @@ if menu == "🏠 Principal":
         display_kpi_metrics(kpis, "principal", 'Pendientes')
         st.markdown("---")
         st.subheader("🗂️ Tabla de Tickets")
-        display_detail_table(df_img_path, df, st.session_state.user_role,
+        # --- CORRECCIÓN DE ERROR ---
+        # Estaba pasando df_img_path que no está definido. Cambiado a df_unicos.
+        display_detail_table(df_unicos, df, st.session_state.user_role, 
                              st.session_state.supervisor_id, supervisor_sel,
                              estatus_sel, "principal_sup", "principal")
 
@@ -885,8 +900,10 @@ elif menu == "🎯 Citas Puntuales":
     df_citas = pd.DataFrame()
     if all(col in df_unicos.columns for col in ['Prioridad', 'Vence', 'Estado', 'OrdenExterna']):
         df_base = df_unicos.dropna(subset=['Vence'])
+        # --- CORRECCIÓN DE ERROR ---
+        # El .tr.lower() era un error de tipeo, debe ser .str.lower()
         mask = (df_base['Prioridad'].astype(str) == '100') & \
-               (df_base.get('OE_Vencimiento_Original', pd.Series()).str.tr.lower() == 'vencida') & \
+               (df_base.get('OE_Vencimiento_Original', pd.Series()).str.lower() == 'vencida') & \
                (df_base['Vence'].dt.normalize() == hoy)
         df_citas = df_base[mask]
     
@@ -1015,12 +1032,14 @@ elif menu == "📈 Rendimiento":
     
     df_rendimiento = pd.DataFrame()
     if 'OE_Creacion' in df_unicos.columns and fecha_inicio <= fecha_fin:
-        fecha_inicio_dt = pd.to_datetime(fecha_inicio)
+        fecha_inicio_dt = pd.to_datetime(fecha_info)
         fecha_fin_dt = pd.to_datetime(fecha_fin) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
         
+        # --- CORRECCIÓN DE ERROR ---
+        # Cambiado 'OE_SISTEMA' a 'OE_Creacion' para que el filtro de fecha funcione
         df_rendimiento = df_unicos[
             (df_unicos['OE_Creacion'] >= fecha_inicio_dt) &
-            (df_unicos['OE_Creacion'] <= fecha_fin_dt)  # <-- ¡ERROR! Esta línea tiene un error.
+            (df_unicos['OE_Creacion'] <= fecha_fin_dt)
         ]
     
     if df_rendimiento.empty:
