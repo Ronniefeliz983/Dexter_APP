@@ -6,26 +6,4 @@ secondaryBackgroundColor="#2a2a2a" # Fondo ligeramente más claro para sidebar, 
 textColor="#ffffff" # Texto principal blanco
 font="sans serif" # Fuente limpia
 
-[server]
-maxUploadSize = 10
-maxMessageSize = 10
-enableCORS = false
-enableXsrfProtection = true
-runOnSave = false
-headless = true
-port = 10000
-address = "0.0.0.0"
 
-[browser]
-gatherUsageStats = false
-serverAddress = "0.0.0.0"
-serverPort = 10000
-
-[runner]
-magicEnabled = false
-installTracer = false
-fastReruns = true
-
-[client]
-showErrorDetails = false
-toolbarMode = "minimal"
