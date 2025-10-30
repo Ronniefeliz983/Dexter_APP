@@ -82,20 +82,27 @@ if not verificar_login():
 st_autorefresh(interval=30 * 1000, key="data_refresh")
 
 # ====================================
-# CONEXIÓN OPTIMIZADA A SUPABASE
+# CONEXIÓN OPTIMIZADA A SUPABASE (CORREGIDA)
 # ====================================
 
 @st.cache_resource
 def get_database_engine():
     """Pool de conexiones optimizado"""
     DATABASE_URL = None
-    try:
-        DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
-    except:
-        DATABASE_URL = os.environ.get("DATABASE_URL")
     
+    # 1. INTENTAR PRIMERO CON VARIABLES DE ENTORNO (para Render)
+    DATABASE_URL = os.environ.get("DATABASE_URL")
+    
+    # 2. SI NO EXISTE (ej. desarrollo local), USAR st.secrets
     if not DATABASE_URL:
-        st.error("⚠️ No se encontró la DATABASE_URL")
+        try:
+            DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
+        except:
+            DATABASE_URL = None # No se encontró en ningún lado
+
+    # 3. VERIFICACIÓN FINAL
+    if not DATABASE_URL:
+        st.error("⚠️ No se encontró la DATABASE_URL. Asegúrate de configurarla en Render (Environment) o localmente (secrets.toml)")
         return None
     
     engine = create_engine(
@@ -285,7 +292,7 @@ def denormalizar_columnas_desde_sql(df_sql):
     return df_csv[columnas_esperadas]
 
 # ====================================
-# CARGA OPTIMIZADA DE DATOS
+# CARGA OPTIMIZADA DE DATOS (CORREGIDA)
 # ====================================
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -341,18 +348,20 @@ def cargar_datos():
                     es_negocio = df.get('Tipo_Cliente', pd.Series(dtype=str)) == 'negocio'
                     df['PYME'] = df['PYME'].fillna(False).astype(bool)
                     df['Es_PYME_Negocio'] = df['PYME'] & es_negocio
-            else:
-                df['PYME'] = False
-                df['Vence en'] = pd.NaT
-                df['Vencido'] = False
-                df['Es_PYME_Negocio'] = False
+                else:
+                    df['PYME'] = False
+                    df['Vence en'] = pd.NaT
+                    df['Vencido'] = False
+                    df['Es_PYME_Negocio'] = False
 
             if 'Vencido' not in df.columns:
                 df['Vencido'] = False
             else:
                 df['Vencido'] = df['Vencido'].fillna(False).astype(bool)
             
-            st.success(f"✅ {len(df):,} registros en {timer.time() - start_time:.2f}s")
+            # --- MENSAJE DE ÉXITO ELIMINADO ---
+            # st.success(f"✅ {len(df):,} registros en {timer.time() - start_time:.2f}s")
+            
             return df
             
     except Exception as e:
@@ -678,12 +687,12 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 st.markdown("#### 📊 Eficiencia por supervisor (%)")
                 resumen_graf = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
                 fig_eff = px.bar(resumen_graf.sort_values('Eficiencia_Total_%'), 
-                                x='Eficiencia_Total_%', y='Supervisor', 
-                                orientation='h', text='Eficiencia_Total_%',
-                                color='Eficiencia_Total_%', color_continuous_scale='Blues')
+                                 x='Eficiencia_Total_%', y='Supervisor', 
+                                 orientation='h', text='Eficiencia_Total_%',
+                                 color='Eficiencia_Total_%', color_continuous_scale='Blues')
                 fig_eff.add_shape(type="line", x0=80, y0=-0.5, x1=80, 
-                                 y1=len(resumen_graf)-0.5, 
-                                 line=dict(color="grey", width=2, dash="dash"))
+                                  y1=len(resumen_graf)-0.5, 
+                                  line=dict(color="grey", width=2, dash="dash"))
                 fig_eff.update_traces(texttemplate='%{text:.1f}%')
                 fig_eff.update_layout(template="plotly_dark", height=400)
                 st.plotly_chart(fig_eff, use_container_width=True)
@@ -691,8 +700,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             with col_chart2:
                 st.markdown("#### 🎫 Total por supervisor")
                 fig_total = px.bar(resumen_graf.sort_values('Total', ascending=False),
-                                  x='Supervisor', y='Total', text='Total',
-                                  color='Total', color_continuous_scale='Blues')
+                                   x='Supervisor', y='Total', text='Total',
+                                   color='Total', color_continuous_scale='Blues')
                 fig_total.update_traces(texttemplate='%{text}')
                 fig_total.update_layout(template="plotly_dark", height=400)
                 st.plotly_chart(fig_total, use_container_width=True)
@@ -706,8 +715,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         resumen_pend = pendientes_df.groupby('Supervisor')['OrdenExterna'].count().reset_index()
                         resumen_pend.columns = ['Supervisor', 'Pendientes']
                         fig_pend = px.bar(resumen_pend.sort_values('Pendientes', ascending=False),
-                                        x='Supervisor', y='Pendientes', text='Pendientes',
-                                        color='Pendientes', color_continuous_scale='Blues')
+                                          x='Supervisor', y='Pendientes', text='Pendientes',
+                                          color='Pendientes', color_continuous_scale='Blues')
                         fig_pend.update_layout(template="plotly_dark", height=300)
                         st.plotly_chart(fig_pend, use_container_width=True)
 
@@ -718,8 +727,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     resumen_venc = vencidos_df.groupby('Supervisor')['OrdenExterna'].count().reset_index()
                     resumen_venc.columns = ['Supervisor', 'Vencidas']
                     fig_venc = px.bar(resumen_venc.sort_values('Vencidas', ascending=False),
-                                    x='Supervisor', y='Vencidas', text='Vencidas',
-                                    color='Vencidas', color_continuous_scale='Reds')
+                                      x='Supervisor', y='Vencidas', text='Vencidas',
+                                      color='Vencidas', color_continuous_scale='Reds')
                     fig_venc.update_layout(template="plotly_dark", height=300)
                     st.plotly_chart(fig_venc, use_container_width=True)
 
@@ -763,7 +772,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, 
-                           global_supervisor_sel, status_filter, page_key, page_key)
+                             global_supervisor_sel, status_filter, page_key, page_key)
 
 # ====================================
 # APLICACIÓN PRINCIPAL
@@ -783,10 +792,10 @@ st.sidebar.title("📌 Menú")
 
 if st.session_state.user_role == "admin":
     menu_options = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", 
-                   "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento"]
+                    "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento"]
 else:
     menu_options = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", 
-                   "🎯 Citas Puntuales", "🔍 Tracking Ticket", "📅 Antiguas", "📈 Rendimiento"]
+                    "🎯 Citas Puntuales", "🔍 Tracking Ticket", "📅 Antiguas", "📈 Rendimiento"]
 
 menu = st.sidebar.radio("Selecciona una página", menu_options)
 
@@ -832,16 +841,16 @@ if menu == "🏠 Principal":
     
     if st.session_state.user_role in ["admin", "gerencia"]:
         render_dashboard_page("Principal", df_unicos, df, st.session_state.user_role,
-                            st.session_state.supervisor_id, supervisor_sel, 
-                            estatus_sel, "principal")
+                              st.session_state.supervisor_id, supervisor_sel, 
+                              estatus_sel, "principal")
     else:
         kpis = calcular_kpis(df_unicos, df)
         display_kpi_metrics(kpis, "principal", 'Pendientes')
         st.markdown("---")
         st.subheader("🗂️ Tabla de Tickets")
         display_detail_table(df_unicos, df, st.session_state.user_role,
-                           st.session_state.supervisor_id, supervisor_sel,
-                           estatus_sel, "principal_sup", "principal")
+                             st.session_state.supervisor_id, supervisor_sel,
+                             estatus_sel, "principal_sup", "principal")
 
 elif menu == "📊 Análisis PYMEs":
     st.title(f"📊 Análisis PYMEs")
@@ -849,8 +858,8 @@ elif menu == "📊 Análisis PYMEs":
     if 'Es_PYME_Negocio' in df_unicos.columns:
         df_pymes = df_unicos[df_unicos['Es_PYME_Negocio'] == True]
     render_dashboard_page("PYMEs", df_pymes, df, st.session_state.user_role,
-                        st.session_state.supervisor_id, supervisor_sel, 
-                        estatus_sel, "pymes")
+                          st.session_state.supervisor_id, supervisor_sel, 
+                          estatus_sel, "pymes")
 
 elif menu == "⏰ Puntualidad":
     st.title(f"⏰ Análisis de Puntualidad")
@@ -864,8 +873,8 @@ elif menu == "⏰ Puntualidad":
         df_puntuales = df_unicos[mask_fecha | mask_texto]
     
     render_dashboard_page("Puntualidad", df_puntuales, df, st.session_state.user_role,
-                        st.session_state.supervisor_id, supervisor_sel, 
-                        estatus_sel, "puntualidad")
+                          st.session_state.supervisor_id, supervisor_sel, 
+                          estatus_sel, "puntualidad")
 
 elif menu == "🎯 Citas Puntuales":
     st.title(f"🎯 Análisis de Citas Puntuales")
@@ -880,19 +889,19 @@ elif menu == "🎯 Citas Puntuales":
         df_citas = df_base[mask]
     
     render_dashboard_page("Citas", df_citas, df, st.session_state.user_role,
-                        st.session_state.supervisor_id, supervisor_sel, 
-                        estatus_sel, "citas")
+                          st.session_state.supervisor_id, supervisor_sel, 
+                          estatus_sel, "citas")
 
 elif menu == "🔍 Tracking Ticket":
     st.title(f"🔍 Tracking de Tickets")
     st.markdown("---")
     
     ticket_busqueda = st.text_input("🎫 Ingresa el número de Orden Externa",
-                                   placeholder="Ejemplo: 12345678")
+                                  placeholder="Ejemplo: 12345678")
     
     if ticket_busqueda:
         df_track = filtrar_dataframe_con_historial(df, df_supervisor_unicos, 
-                                                  ticket_busqueda, supervisor_sel, None)
+                                                    ticket_busqueda, supervisor_sel, None)
         
         if df_track.empty:
             st.warning("⚠️ No se encontraron tickets")
@@ -915,17 +924,17 @@ elif menu == "🔍 Tracking Ticket":
                         with col2:
                             color = get_color_estado(ticket_data.get('Estado', 'N/A'))
                             st.markdown(f"""<div style='background-color: {color}; 
-                                          color: white; padding: 8px; border-radius: 5px; 
-                                          text-align: center; font-weight: bold;'>
-                                          {str(ticket_data.get('Estado', 'N/A')).upper()}</div>""", 
-                                      unsafe_allow_html=True)
+                                                 color: white; padding: 8px; border-radius: 5px; 
+                                                 text-align: center; font-weight: bold;'>
+                                                 {str(ticket_data.get('Estado', 'N/A')).upper()}</div>""", 
+                                        unsafe_allow_html=True)
                         
                         with col3:
                             es_pyme = ticket_data.get('Es_PYME_Negocio', False)
                             tipo = "🏢 PYME" if es_pyme else "👤 Regular"
                             st.markdown(f"""<div style='padding: 8px; border-radius: 5px; 
-                                          text-align: center; background-color: #2a2a4a;'>
-                                          {tipo}</div>""", unsafe_allow_html=True)
+                                                 text-align: center; background-color: #2a2a4a;'>
+                                                 {tipo}</div>""", unsafe_allow_html=True)
                         
                         with col4:
                             if ticket_data.get('Vencido', False) and es_pyme:
@@ -939,9 +948,9 @@ elif menu == "🔍 Tracking Ticket":
                                 color = "#2a2a4a"
                             
                             st.markdown(f"""<div style='background-color: {color}; 
-                                          color: white; padding: 8px; border-radius: 5px; 
-                                          text-align: center; font-weight: bold;'>
-                                          {badge}</div>""", unsafe_allow_html=True)
+                                                 color: white; padding: 8px; border-radius: 5px; 
+                                                 text-align: center; font-weight: bold;'>
+                                                 {badge}</div>""", unsafe_allow_html=True)
                         
                         st.markdown("---")
                         
@@ -982,8 +991,8 @@ elif menu == "📅 Antiguas":
             df_3_dias = df_unicos[df_unicos['OE_Creacion'].dt.normalize() == fecha_3_dias]
         
         render_dashboard_page("3 Días", df_3_dias, df, st.session_state.user_role,
-                            st.session_state.supervisor_id, supervisor_sel,
-                            estatus_sel, "antiguas_3_dias")
+                              st.session_state.supervisor_id, supervisor_sel,
+                              estatus_sel, "antiguas_3_dias")
     
     with tab2:
         fecha_limite = hoy - timedelta(days=3)
@@ -992,8 +1001,8 @@ elif menu == "📅 Antiguas":
             df_extrema = df_unicos[df_unicos['OE_Creacion'].dt.normalize() < fecha_limite]
         
         render_dashboard_page("Extrema", df_extrema, df, st.session_state.user_role,
-                            st.session_state.supervisor_id, supervisor_sel,
-                            estatus_sel, "antiguas_extrema", 'Total')
+                              st.session_state.supervisor_id, supervisor_sel,
+                              estatus_sel, "antiguas_extrema", 'Total')
 
 elif menu == "📈 Rendimiento":
     st.title(f"📈 Análisis de Rendimiento")
@@ -1016,5 +1025,5 @@ elif menu == "📈 Rendimiento":
         st.warning("No hay datos en el período seleccionado")
     else:
         render_dashboard_page("Rendimiento", df_rendimiento, df, st.session_state.user_role,
-                            st.session_state.supervisor_id, supervisor_sel,
-                            estatus_sel, "rendimiento")
+                              st.session_state.supervisor_id, supervisor_sel,
+                              estatus_sel, "rendimiento")
