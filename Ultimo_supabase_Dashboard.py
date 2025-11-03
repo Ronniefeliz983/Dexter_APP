@@ -19,7 +19,37 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S - v2.6.13", layout="wide") # Título actualizado
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.14", layout="wide") # Título actualizado
+
+# --- INICIA CÓDIGO NUEVO v2.6.13: CSS PARA MÓVILES ---
+st.markdown("""
+<style>
+/* Media query para pantallas de celular (ej. 640px o menos) */
+@media (max-width: 640px) {
+    
+    /* Apunta a los bloques de columnas (stHorizontalBlock).
+    Les decimos que "envuelvan" los elementos (flex-wrap: wrap) 
+    si no caben en una sola fila.
+    */
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    
+    /* Apunta a cada KPI individual (cada columna) DENTRO de un bloque horizontal.
+    'flex: 1 1 150px' significa:
+    - Crece si hay espacio (flex-grow: 1)
+    - Encógete si no hay espacio (flex-shrink: 1)
+    - Intenta tener 150px de ancho base (flex-basis: 150px)
+    */
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stVerticalBlock"] {
+        flex: 1 1 150px !important;
+        min-width: 140px; /* Asegura un ancho mínimo para que no se aplaste */
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+# --- FIN DEL NUEVO CÓDIGO ---
+
 
 # --------------------------
 # Sistema de Login
@@ -846,7 +876,7 @@ def display_detail_table(df_data, df_full_historial, role, role_supervisor_id, g
             )
 
 # --- NUEVA FUNCIÓN v2.6.13 ---
-def render_hourly_efficiency_chart(df_page_data, df_full_historial):
+def render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key="hourly_efficiency_chart"):
     """Calcula y renderiza el gráfico de eficiencia por hora."""
     st.markdown("---")
     st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
@@ -901,7 +931,8 @@ def render_hourly_efficiency_chart(df_page_data, df_full_historial):
             paper_bgcolor='rgba(0,0,0,0)',
             legend_title_text=''
         )
-        st.plotly_chart(fig_linea_eficiencia, use_container_width=True)
+        # --- CORRECCIÓN v2.6.14 ---
+        st.plotly_chart(fig_linea_eficiencia, use_container_width=True, key=chart_key)
 
     except Exception as e:
         st.error(f"Error al generar el gráfico de línea de eficiencia: {e}")
@@ -909,7 +940,7 @@ def render_hourly_efficiency_chart(df_page_data, df_full_historial):
 # --- FIN NUEVA FUNCIÓN ---
 
 
-# --- Render Dashboard Function (MODIFICADO para gráficos de Admin y v2.6.13) ---
+# --- Render Dashboard Function (MODIFICADO para gráficos de Admin y v2.6.14) ---
 def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None):
     """
     Función genérica para renderizar una página del dashboard.
@@ -975,7 +1006,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     fig_eff.add_annotation(x=80, y=len(resumen_eff_sorted['Supervisor'])-0.5, text="Meta 80%", showarrow=False, yshift=10, xshift=-10)
                     fig_eff.update_traces(texttemplate='%{text:.1f}%', textposition='auto')
                     fig_eff.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title="Eficiencia Total (%)", yaxis_title=None, coloraxis_showscale=False, uniformtext_minsize=8, uniformtext_mode='hide')
-                    st.plotly_chart(fig_eff, use_container_width=True)
+                    # --- CORRECCIÓN v2.6.14 ---
+                    st.plotly_chart(fig_eff, use_container_width=True, key=f"{page_key}_eff_chart")
 
                 with col_chart2:
                     st.markdown("#### 🎫 Tickets por supervisor")
@@ -984,7 +1016,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     fig_total = px.bar(resumen_total_sorted, x='Supervisor', y='Total', text='Total', color='Total', color_continuous_scale='Blues')
                     fig_total.update_traces(texttemplate='%{text}', textposition='outside')
                     fig_total.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title=None, yaxis_title="Total Tickets", coloraxis_showscale=False)
-                    st.plotly_chart(fig_total, use_container_width=True)
+                    # --- CORRECCIÓN v2.6.14 ---
+                    st.plotly_chart(fig_total, use_container_width=True, key=f"{page_key}_total_chart")
 
                 # --- Lógica CONDICIONAL para GRÁFICOS ADICIONALES ---
                 if page_key != "pymes":
@@ -1001,7 +1034,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         fig_pendientes = px.bar(resumen_pendientes, x='Supervisor', y='Tickets Pendientes', text='Tickets Pendientes', color='Tickets Pendientes', color_continuous_scale='Blues')
                         fig_pendientes.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_pendientes.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title=None, yaxis_title="Total Tickets Pendientes", coloraxis_showscale=False)
-                        st.plotly_chart(fig_pendientes, use_container_width=True)
+                        # --- CORRECCIÓN v2.6.14 ---
+                        st.plotly_chart(fig_pendientes, use_container_width=True, key=f"{page_key}_pending_chart")
                     else:
                         st.info("No hay tickets pendientes ('activo' o 'iniciado') para mostrar en este desglose con los filtros actuales.")
 
@@ -1030,7 +1064,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                                                    xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
-                        st.plotly_chart(fig_vencidos, use_container_width=True)
+                        # --- CORRECCIÓN v2.6.14 ---
+                        st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
                     else:
                         st.info("No hay PYMEs vencidas para mostrar en este desglose con los filtros actuales.")
 
@@ -1049,7 +1084,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
                 # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
                 if page_key == "rendimiento":
-                    render_hourly_efficiency_chart(df_page_data, df_full_historial)
+                    render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
 
             except Exception as e:
                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
@@ -1077,7 +1112,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         
         # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
         if page_key == "rendimiento":
-            render_hourly_efficiency_chart(df_page_data, df_full_historial)
+            render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
 
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
@@ -1113,7 +1148,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
         # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
         if page_key == "rendimiento":
-            render_hourly_efficiency_chart(df_page_data, df_full_historial)
+            render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
 
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
@@ -1571,7 +1606,7 @@ elif menu == "📅 Antiguas":
             critical_metric_key='Total'
         )
 
-# --- INICIA BLOQUE CORREGIDO v2.6.12 ---
+# --- INICIA BLOQUE CORREGIDO v2.6.14 ---
 elif menu == "📈 Rendimiento":
     st.title(f"📈 Análisis de Rendimiento - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Esta página filtra los tickets por la fecha y hora en que fueron PROCESADOS hoy.")
@@ -1625,7 +1660,7 @@ elif menu == "📈 Rendimiento":
     if df_rendimiento.empty:
         st.warning("No hay datos en el rango de fecha/hora seleccionado con los filtros actuales.")
     else:
-        # El gráfico de línea se renderiza DENTRO de render_dashboard_page
+        # El gráfico de línea ahora se renderiza DENTRO de esta función
         render_dashboard_page(
             title_prefix="Rendimiento",
             df_page_data=df_rendimiento,
@@ -1636,4 +1671,4 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" 
         )
-# --- FIN BLOQUE CORREGIDO v2.6.12 ---
+# --- FIN BLOQUE CORREGIDO v2.6.14 ---
