@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S - v2.6.12", layout="wide") # Título actualizado
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.13", layout="wide") # Título actualizado
 
 # --------------------------
 # Sistema de Login
@@ -845,11 +845,75 @@ def display_detail_table(df_data, df_full_historial, role, role_supervisor_id, g
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
 
-# --- Render Dashboard Function (MODIFICADO para gráficos de Admin) ---
+# --- NUEVA FUNCIÓN v2.6.13 ---
+def render_hourly_efficiency_chart(df_page_data, df_full_historial):
+    """Calcula y renderiza el gráfico de eficiencia por hora."""
+    st.markdown("---")
+    st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
+    try:
+        df_grafico = df_page_data.copy()
+        df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
+        
+        def agg_kpis_por_hora(group):
+            # Usamos 'df_full_historial' para obtener el cohort inicial
+            kpis_group = calcular_kpis(group, df_full_historial) 
+            return pd.Series(kpis_group)
+
+        # Aplicar la función de kpis a cada grupo de hora
+        resumen_hora = df_grafico.groupby('Hora').apply(agg_kpis_por_hora).reset_index()
+
+        # Asegurarse de que las columnas de eficiencia existan
+        if 'Eficiencia_Total_%' not in resumen_hora.columns:
+            resumen_hora['Eficiencia_Total_%'] = 0.0
+        if 'Eficiencia_Inicial' not in resumen_hora.columns:
+            resumen_hora['Eficiencia_Inicial'] = 0.0
+
+        # Completar horas faltantes con 0 para un gráfico continuo
+        horas_completas = pd.DataFrame({'Hora': range(24)})
+        resumen_hora = pd.merge(horas_completas, resumen_hora, on='Hora', how='left').fillna(0)
+
+        # Preparar para Plotly (melt)
+        resumen_hora_melted = resumen_hora.melt(
+            id_vars=['Hora'],
+            value_vars=['Eficiencia_Total_%', 'Eficiencia_Inicial'],
+            var_name='Tipo de Eficiencia',
+            value_name='Eficiencia'
+        )
+
+        fig_linea_eficiencia = px.line(
+            resumen_hora_melted,
+            x='Hora',
+            y='Eficiencia',
+            color='Tipo de Eficiencia',
+            title="Eficiencia por Hora (Total vs. Inicial)",
+            markers=True,
+            text='Eficiencia'
+        )
+        
+        fig_linea_eficiencia.update_traces(texttemplate='%{text:.1f}%', textposition='top center')
+        fig_linea_eficiencia.update_layout(
+            xaxis_title="Hora del Día (0-23)",
+            yaxis_title="Eficiencia (%)",
+            xaxis=dict(tickmode='linear', dtick=1, range=[-0.5, 23.5]),
+            yaxis=dict(range=[0, 105]),
+            template="plotly_dark",
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            legend_title_text=''
+        )
+        st.plotly_chart(fig_linea_eficiencia, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error al generar el gráfico de línea de eficiencia: {e}")
+        st.error(traceback.format_exc()) # <-- Más detalle del error
+# --- FIN NUEVA FUNCIÓN ---
+
+
+# --- Render Dashboard Function (MODIFICADO para gráficos de Admin y v2.6.13) ---
 def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None):
     """
     Función genérica para renderizar una página del dashboard.
-    Maneja la lógica de KPIs y resúmenes por rol. ADMIN AHORA MUESTRA GRÁFICOS CON PLOTLY.
+    Maneja la lógica de KPIs y resúmenes por rol.
     """
     # Chequeo robusto de df_page_data
     if df_page_data is None or df_page_data.empty:
@@ -858,7 +922,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         return
 
     # Calcular KPIs *antes* de los chequeos de rol
-    # MODIFICADO: Pasa el df_full_historial para los nuevos KPIs
     kpis = calcular_kpis(df_page_data, df_full_historial)
 
     # --- Vista Admin ---
@@ -872,7 +935,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         total_iniciado_admin = kpis.get('Total_Iniciado', 0)
         eficiencia_inicial_admin = kpis.get('Eficiencia_Inicial', 0.0)
 
-        # --- MODIFICADO: Layout de KPIs condicional por página ---
+        # Layout de KPIs condicional por página
         if page_key == "principal":
             st.subheader("📊 Resumen General (Todos los Supervisores)")
             col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
@@ -891,8 +954,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             col_kpi3.metric("Cerrados", cerrados_admin)
             col_kpi4.metric("Pendiente", pendientes_admin_kpi)
             col_kpi5.metric("Manejados", manejados_kpi_admin)
-        # --- FIN DE LA MODIFICACIÓN ---
-
 
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
@@ -907,7 +968,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 col_chart1, col_chart2 = st.columns(2)
                 with col_chart1:
                     st.markdown("#### 📊 Eficiencia Total por supervisor (%)")
-                    # Excluir la fila 'TOTAL' del gráfico
                     resumen_grafico_eff = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
                     resumen_eff_sorted = resumen_grafico_eff.sort_values('Eficiencia_Total_%', ascending=True)
                     fig_eff = px.bar(resumen_eff_sorted, x='Eficiencia_Total_%', y='Supervisor', orientation='h', text='Eficiencia_Total_%', color='Eficiencia_Total_%', color_continuous_scale='Blues')
@@ -919,7 +979,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
                 with col_chart2:
                     st.markdown("#### 🎫 Tickets por supervisor")
-                    # Excluir la fila 'TOTAL' del gráfico
                     resumen_grafico_total = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
                     resumen_total_sorted = resumen_grafico_total.sort_values('Total', ascending=False)
                     fig_total = px.bar(resumen_total_sorted, x='Supervisor', y='Total', text='Total', color='Total', color_continuous_scale='Blues')
@@ -928,8 +987,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     st.plotly_chart(fig_total, use_container_width=True)
 
                 # --- Lógica CONDICIONAL para GRÁFICOS ADICIONALES ---
-
-                # Gráfico de Pendientes (NO en página PYMES)
                 if page_key != "pymes":
                     st.markdown("#### ⏳ Tickets Pendientes por Supervisor")
                     if 'Estado' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
@@ -948,7 +1005,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     else:
                         st.info("No hay tickets pendientes ('activo' o 'iniciado') para mostrar en este desglose con los filtros actuales.")
 
-                # Gráfico de PYMES Vencidas (SÓLO en página PYMES)
                 if page_key == "pymes":
                     st.markdown("#### ⚠️ PYMEs Vencidas por Supervisor")
                     if 'Vencido' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
@@ -977,8 +1033,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         st.plotly_chart(fig_vencidos, use_container_width=True)
                     else:
                         st.info("No hay PYMEs vencidas para mostrar en este desglose con los filtros actuales.")
-                # --- FIN Lógica CONDICIONAL ---
-
 
                 # Tabla detallada (siempre visible)
                 st.markdown("---")
@@ -993,6 +1047,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     )
 
+                # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
+                if page_key == "rendimiento":
+                    render_hourly_efficiency_chart(df_page_data, df_full_historial)
+
             except Exception as e:
                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
                 if not resumen_admin.empty:
@@ -1001,7 +1059,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
     # --- Vista Gerencia ---
     elif role == "gerencia":
-        # MODIFICADO: Pasa el page_key
         display_kpi_metrics(kpis, page_key, critical_metric_key)
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
@@ -1017,6 +1074,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             st.dataframe(resumen_tec, use_container_width=True, hide_index=True)
         else:
             st.info("No hay datos de 'Asignado_A' para mostrar resumen por técnico.")
+        
+        # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
+        if page_key == "rendimiento":
+            render_hourly_efficiency_chart(df_page_data, df_full_historial)
 
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
@@ -1024,7 +1085,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
     # --- Vista Supervisor / Supervisor_Old ---
     else:
-        # MODIFICADO: Pasa el page_key
         display_kpi_metrics(kpis, page_key, critical_metric_key)
         st.markdown("---")
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
@@ -1050,6 +1110,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
         else:
             st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+
+        # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
+        if page_key == "rendimiento":
+            render_hourly_efficiency_chart(df_page_data, df_full_historial)
 
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
@@ -1134,7 +1198,7 @@ if menu == "🏠 Principal":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="principal" # MODIFICADO: Pasa la clave de la página
+            page_key="principal" 
         )
     else: # Vista Supervisor/Supervisor_Old
         
@@ -1173,7 +1237,7 @@ elif menu == "📊 Análisis PYMEs":
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel,
         status_filter=estatus_sel,
-        page_key="pymes" # MODIFICADO: Pasa la clave de la página
+        page_key="pymes" 
     )
 
 elif menu == "⏰ Puntualidad":
@@ -1196,7 +1260,7 @@ elif menu == "⏰ Puntualidad":
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel,
         status_filter=estatus_sel,
-        page_key="puntualidad" # MODIFICADO: Pasa la clave de la página
+        page_key="puntualidad" 
     )
 
 elif menu == "🎯 Citas Puntuales":
@@ -1266,7 +1330,7 @@ elif menu == "🎯 Citas Puntuales":
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel,
         status_filter=estatus_sel,
-        page_key="citas" # MODIFICADO: Pasa la clave de la página
+        page_key="citas" 
     )
 
 elif menu == "🔍 Tracking Ticket":
@@ -1561,72 +1625,7 @@ elif menu == "📈 Rendimiento":
     if df_rendimiento.empty:
         st.warning("No hay datos en el rango de fecha/hora seleccionado con los filtros actuales.")
     else:
-        
-        # --- INICIA NUEVO GRÁFICO DE LÍNEA v2.6.12 ---
-        st.markdown("---")
-        st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
-        try:
-            df_grafico = df_rendimiento.copy()
-            df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
-            
-            # (Re-usamos la lógica de calcular_kpis, pero aplicada por hora)
-            
-            def agg_kpis_por_hora(group):
-                # Usamos 'df' (el historial completo) para obtener el cohort inicial
-                kpis_group = calcular_kpis(group, df) 
-                return pd.Series(kpis_group)
-
-            # ESTA es la línea que SÍ funciona
-            resumen_hora = df_grafico.groupby('Hora').apply(agg_kpis_por_hora).reset_index()
-
-            # Asegurarse de que las columnas de eficiencia existan
-            if 'Eficiencia_Total_%' not in resumen_hora.columns:
-                resumen_hora['Eficiencia_Total_%'] = 0.0
-            if 'Eficiencia_Inicial' not in resumen_hora.columns:
-                resumen_hora['Eficiencia_Inicial'] = 0.0
-
-            # Completar horas faltantes con 0 para un gráfico continuo
-            horas_completas = pd.DataFrame({'Hora': range(24)})
-            resumen_hora = pd.merge(horas_completas, resumen_hora, on='Hora', how='left').fillna(0)
-
-            # Preparar para Plotly (melt)
-            resumen_hora_melted = resumen_hora.melt(
-                id_vars=['Hora'],
-                value_vars=['Eficiencia_Total_%', 'Eficiencia_Inicial'],
-                var_name='Tipo de Eficiencia',
-                value_name='Eficiencia'
-            )
-
-            fig_linea_eficiencia = px.line(
-                resumen_hora_melted,
-                x='Hora',
-                y='Eficiencia',
-                color='Tipo de Eficiencia',
-                title="Eficiencia por Hora (Total vs. Inicial)",
-                markers=True,
-                text='Eficiencia'
-            )
-            
-            fig_linea_eficiencia.update_traces(texttemplate='%{text:.1f}%', textposition='top center')
-            fig_linea_eficiencia.update_layout(
-                xaxis_title="Hora del Día (0-23)",
-                yaxis_title="Eficiencia (%)",
-                xaxis=dict(tickmode='linear', dtick=1, range=[-0.5, 23.5]),
-                yaxis=dict(range=[0, 105]),
-                template="plotly_dark",
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                legend_title_text=''
-            )
-            st.plotly_chart(fig_linea_eficiencia, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Error al generar el gráfico de línea de eficiencia: {e}")
-            st.error(traceback.format_exc()) # <-- Más detalle del error
-        # --- FIN NUEVO GRÁFICO DE LÍNEA ---
-        
-        
-        # El resto de la página de rendimiento (resúmenes y tabla)
+        # El gráfico de línea se renderiza DENTRO de render_dashboard_page
         render_dashboard_page(
             title_prefix="Rendimiento",
             df_page_data=df_rendimiento,
@@ -1637,4 +1636,4 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" 
         )
-# --- FIN BLOQUE CORREGIDO v2.6.11 (ahora v2.6.12) ---
+# --- FIN BLOQUE CORREGIDO v2.6.12 ---
