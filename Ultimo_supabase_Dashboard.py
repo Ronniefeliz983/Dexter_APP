@@ -1490,7 +1490,9 @@ elif menu == "📅 Antiguas":
         fecha_limite = hoy - timedelta(days=3)
         df_extrema = pd.DataFrame()
         if not df_unicos_antiguedad.empty:
-            if pd.api.types.is_datetime64_any_dtype(df_unicos_antigad['OE_Creacion']):
+            # --- AQUÍ ESTÁ LA CORRECCIÓN v2.6.10 ---
+            if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
+            # --- FIN DE LA CORRECCIÓN ---
                 df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
 
         render_dashboard_page(
