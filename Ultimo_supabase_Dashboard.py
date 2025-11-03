@@ -1507,7 +1507,7 @@ elif menu == "📅 Antiguas":
             critical_metric_key='Total'
         )
 
-# --- INICIA BLOQUE CORREGIDO v2.6.11 ---
+# --- INICIA BLOQUE CORREGIDO v2.6.12 ---
 elif menu == "📈 Rendimiento":
     st.title(f"📈 Análisis de Rendimiento - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Esta página filtra los tickets por la fecha y hora en que fueron PROCESADOS hoy.")
@@ -1569,17 +1569,14 @@ elif menu == "📈 Rendimiento":
             df_grafico = df_rendimiento.copy()
             df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
             
-            # Calcular kpis por hora
-            kpis_hora = calcular_kpis(df_grafico.groupby('Hora'), df) # <-- Llama a tu función
-            
             # (Re-usamos la lógica de calcular_kpis, pero aplicada por hora)
-            # Necesitamos el cohort global
-            global_initial_cohort_ids = get_earliest_batch_initial_cohort(df)
-
+            
             def agg_kpis_por_hora(group):
-                kpis_group = calcular_kpis(group, df) # df es el historial completo
+                # Usamos 'df' (el historial completo) para obtener el cohort inicial
+                kpis_group = calcular_kpis(group, df) 
                 return pd.Series(kpis_group)
 
+            # ESTA es la línea que SÍ funciona
             resumen_hora = df_grafico.groupby('Hora').apply(agg_kpis_por_hora).reset_index()
 
             # Asegurarse de que las columnas de eficiencia existan
@@ -1640,4 +1637,4 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" 
         )
-# --- FIN BLOQUE CORREGIDO v2.6.11 ---
+# --- FIN BLOQUE CORREGIDO v2.6.11 (ahora v2.6.12) ---
