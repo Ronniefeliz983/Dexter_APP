@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S - v2.6.14", layout="wide") # Título actualizado
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.15", layout="wide") # Título actualizado
 
 # --- INICIA CÓDIGO NUEVO v2.6.13: CSS PARA MÓVILES ---
 st.markdown("""
@@ -135,6 +135,7 @@ def calcular_pyme_y_vence(fecha_creacion):
         return True, datetime.combine(hoy, time(12, 0))
     return False, None
 
+# --- INICIA CORRECCIÓN v2.6.15: ZONA HORARIA ---
 def calcular_vencido(row):
     # Asegurarse que 'Vence en' es datetime
     vence_en_dt = pd.to_datetime(row.get('Vence en'), errors='coerce')
@@ -143,15 +144,30 @@ def calcular_vencido(row):
     if pd.isna(vence_en_dt) or estado not in ['activo', 'iniciado']:
         return False
 
-    # Comparación segura de timezone
-    ahora_naive = datetime.now().replace(tzinfo=None)
+    # 1. Obtener la hora actual del servidor (que está en UTC)
+    # Usamos utcnow() para ser explícitos
+    ahora_utc = datetime.utcnow()
+    
+    # 2. Definir el offset de tu zona horaria (AST = UTC-4)
+    zona_horaria_offset = timedelta(hours=-4)
+    
+    # 3. Aplicar el offset para obtener la hora local correcta
+    ahora_ast = ahora_utc + zona_horaria_offset
+    
+    # 4. Esta es la hora "naive" (sin info de timezone) que usaremos para comparar
+    ahora_naive = ahora_ast.replace(tzinfo=None)
+    
+    # --- FIN CORRECCIÓN ---
+
     # Hacer 'Vence en' naive para comparar
     vence_en_naive = vence_en_dt.tz_convert(None) if hasattr(vence_en_dt, 'tzinfo') and vence_en_dt.tzinfo is not None else vence_en_dt.replace(tzinfo=None)
 
     try:
+        # Ahora la comparación SÍ será correcta (ej: 09:06 > 12:00 = Falso)
         return ahora_naive > vence_en_naive
     except TypeError: # En caso de que la conversión falle de alguna manera
         return False
+# --- FIN FUNCIÓN CORREGIDA ---
 
 
 # --- NUEVA FUNCIÓN CACHEADA (BASADA EN LOTE_PROCESADO) ---
@@ -727,9 +743,18 @@ def calcular_tiempo_transcurrido(fecha_inicio):
         if pd.isna(fecha_inicio):
             return 'N/A'
 
-    ahora = datetime.now()
-    # Asegurarse de que ambos son naive para la resta
-    ahora_naive = ahora.replace(tzinfo=None)
+    # --- INICIA CORRECCIÓN v2.6.15: ZONA HORARIA ---
+    # 1. Obtener la hora actual del servidor (que está en UTC)
+    ahora_utc = datetime.utcnow()
+    # 2. Definir el offset de tu zona horaria (AST = UTC-4)
+    zona_horaria_offset = timedelta(hours=-4)
+    # 3. Aplicar el offset para obtener la hora local correcta
+    ahora_ast = ahora_utc + zona_horaria_offset
+    # 4. Esta es la hora "naive" (sin info de timezone) que usaremos para comparar
+    ahora_naive = ahora_ast.replace(tzinfo=None)
+    # --- FIN CORRECCIÓN ---
+
+    # Asegurarse de que fecha_inicio es naive
     fecha_inicio_naive = fecha_inicio.tz_convert(None) if hasattr(fecha_inicio, 'tzinfo') and fecha_inicio.tzinfo is not None else fecha_inicio.replace(tzinfo=None)
 
     if ahora_naive < fecha_inicio_naive:
@@ -1475,8 +1500,15 @@ elif menu == "🔍 Tracking Ticket":
                                 fecha_vence = pd.to_datetime(fecha_vence, errors='coerce')
                             if pd.notna(fecha_vence):
                                 try:
-                                    ahora_naive = ahora.replace(tzinfo=None)
+                                    # --- INICIA CORRECCIÓN v2.6.15: ZONA HORARIA ---
+                                    ahora_utc = datetime.utcnow()
+                                    zona_horaria_offset = timedelta(hours=-4)
+                                    ahora_ast = ahora_utc + zona_horaria_offset
+                                    ahora_naive = ahora_ast.replace(tzinfo=None)
+                                    # --- FIN CORRECCIÓN ---
+                                    
                                     fecha_vence_naive = fecha_vence.tz_convert(None) if hasattr(fecha_vence, 'tzinfo') and fecha_vence.tzinfo is not None else fecha_vence.replace(tzinfo=None)
+                                    
                                     if ahora_naive < fecha_vence_naive:
                                         tiempo_restante = fecha_vence_naive - ahora_naive
                                         horas_restantes = int(tiempo_restante.total_seconds() // 3600)
