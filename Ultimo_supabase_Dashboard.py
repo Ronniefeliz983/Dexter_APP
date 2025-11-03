@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S - v2.6.16", layout="wide") # Título actualizado
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.17", layout="wide") # Título actualizado
 
 # --- INICIA CÓDIGO NUEVO v2.6.13: CSS PARA MÓVILES ---
 st.markdown("""
@@ -1319,7 +1319,9 @@ if menu == "🏠 Principal":
                     st.download_button(
                         label=f"📥 Descargar {titulo_resumen}",
                         data=excel_data_resumen_sup,
-                        file_name=f"principal_resumen_{agrupar_por.lower()}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        # --- INICIA CORRECCIÓN v2.6.17 ---
+                        file_name=f"principal_resumen_{agrupar_por.lower()}_{supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        # --- FIN CORRECCIÓN v2.6.17 ---
                         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                         key=f"principal_download_resumen" # Key única
                     )
