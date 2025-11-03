@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S - v2.6.11", layout="wide") # Título actualizado
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.12", layout="wide") # Título actualizado
 
 # --------------------------
 # Sistema de Login
@@ -1483,16 +1483,16 @@ elif menu == "📅 Antiguas":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="antiguas_3_dias" # MODIFICADO: Pasa la clave de la página
+            page_key="antiguas_3_dias" 
         )
 
     with tab2:
         fecha_limite = hoy - timedelta(days=3)
         df_extrema = pd.DataFrame()
         if not df_unicos_antiguedad.empty:
-            # --- AQUÍ ESTÁ LA CORRECCIÓN v2.6.11 (corregido de v2.6.10) ---
+            # --- CORRECCIÓN v2.6.11 ---
             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
-            # --- FIN DE LA CORRECCIÓN ---
+            # --- FIN CORRECCIÓN ---
                 df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
 
         render_dashboard_page(
@@ -1503,7 +1503,7 @@ elif menu == "📅 Antiguas":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="antiguas_extrema", # MODIFICADO: Pasa la clave de la página
+            page_key="antiguas_extrema", 
             critical_metric_key='Total'
         )
 
@@ -1561,6 +1561,75 @@ elif menu == "📈 Rendimiento":
     if df_rendimiento.empty:
         st.warning("No hay datos en el rango de fecha/hora seleccionado con los filtros actuales.")
     else:
+        
+        # --- INICIA NUEVO GRÁFICO DE LÍNEA v2.6.12 ---
+        st.markdown("---")
+        st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
+        try:
+            df_grafico = df_rendimiento.copy()
+            df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
+            
+            # Calcular kpis por hora
+            kpis_hora = calcular_kpis(df_grafico.groupby('Hora'), df) # <-- Llama a tu función
+            
+            # (Re-usamos la lógica de calcular_kpis, pero aplicada por hora)
+            # Necesitamos el cohort global
+            global_initial_cohort_ids = get_earliest_batch_initial_cohort(df)
+
+            def agg_kpis_por_hora(group):
+                kpis_group = calcular_kpis(group, df) # df es el historial completo
+                return pd.Series(kpis_group)
+
+            resumen_hora = df_grafico.groupby('Hora').apply(agg_kpis_por_hora).reset_index()
+
+            # Asegurarse de que las columnas de eficiencia existan
+            if 'Eficiencia_Total_%' not in resumen_hora.columns:
+                resumen_hora['Eficiencia_Total_%'] = 0.0
+            if 'Eficiencia_Inicial' not in resumen_hora.columns:
+                resumen_hora['Eficiencia_Inicial'] = 0.0
+
+            # Completar horas faltantes con 0 para un gráfico continuo
+            horas_completas = pd.DataFrame({'Hora': range(24)})
+            resumen_hora = pd.merge(horas_completas, resumen_hora, on='Hora', how='left').fillna(0)
+
+            # Preparar para Plotly (melt)
+            resumen_hora_melted = resumen_hora.melt(
+                id_vars=['Hora'],
+                value_vars=['Eficiencia_Total_%', 'Eficiencia_Inicial'],
+                var_name='Tipo de Eficiencia',
+                value_name='Eficiencia'
+            )
+
+            fig_linea_eficiencia = px.line(
+                resumen_hora_melted,
+                x='Hora',
+                y='Eficiencia',
+                color='Tipo de Eficiencia',
+                title="Eficiencia por Hora (Total vs. Inicial)",
+                markers=True,
+                text='Eficiencia'
+            )
+            
+            fig_linea_eficiencia.update_traces(texttemplate='%{text:.1f}%', textposition='top center')
+            fig_linea_eficiencia.update_layout(
+                xaxis_title="Hora del Día (0-23)",
+                yaxis_title="Eficiencia (%)",
+                xaxis=dict(tickmode='linear', dtick=1, range=[-0.5, 23.5]),
+                yaxis=dict(range=[0, 105]),
+                template="plotly_dark",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                legend_title_text=''
+            )
+            st.plotly_chart(fig_linea_eficiencia, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Error al generar el gráfico de línea de eficiencia: {e}")
+            st.error(traceback.format_exc()) # <-- Más detalle del error
+        # --- FIN NUEVO GRÁFICO DE LÍNEA ---
+        
+        
+        # El resto de la página de rendimiento (resúmenes y tabla)
         render_dashboard_page(
             title_prefix="Rendimiento",
             df_page_data=df_rendimiento,
