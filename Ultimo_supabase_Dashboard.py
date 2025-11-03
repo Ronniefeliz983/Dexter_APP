@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S - v2.6.15", layout="wide") # Título actualizado
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.16", layout="wide") # Título actualizado
 
 # --- INICIA CÓDIGO NUEVO v2.6.13: CSS PARA MÓVILES ---
 st.markdown("""
@@ -1146,30 +1146,63 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
     # --- Vista Supervisor / Supervisor_Old ---
     else:
         display_kpi_metrics(kpis, page_key, critical_metric_key)
-        st.markdown("---")
-        agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
-        titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
+        
+        # --- INICIA CORRECCIÓN v2.6.16: AÑADIR RESUMEN A 'PRINCIPAL' ---
+        if page_key == "principal":
+            st.markdown("---")
+            agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
+            titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
 
-        st.subheader(f"👥 {titulo_resumen}")
-        if agrupar_por in df_page_data.columns:
-            resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por)
-            if not resumen.empty and 'Supervisor' in resumen.columns and agrupar_por != 'Supervisor':
-                resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True)
+            st.subheader(f"👥 {titulo_resumen}")
+            if agrupar_por in df_page_data.columns:
+                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por)
+                if not resumen.empty and 'Supervisor' in resumen.columns and agrupar_por != 'Supervisor':
+                    resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True)
 
-            if not resumen.empty:
-                st.dataframe(resumen, use_container_width=True, hide_index=True)
-                excel_data_resumen_sup = to_excel(resumen)
-                if excel_data_resumen_sup:
-                    st.download_button(
-                        label=f"📥 Descargar {titulo_resumen}",
-                        data=excel_data_resumen_sup,
-                        file_name=f"{page_key}_resumen_{agrupar_por.lower()}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    )
+                if not resumen.empty:
+                    st.dataframe(resumen, use_container_width=True, hide_index=True)
+                    excel_data_resumen_sup = to_excel(resumen)
+                    if excel_data_resumen_sup:
+                        st.download_button(
+                            label=f"📥 Descargar {titulo_resumen}",
+                            data=excel_data_resumen_sup,
+                            file_name=f"{page_key}_resumen_{agrupar_por.lower()}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key=f"{page_key}_download_resumen" # Key única
+                        )
+                else:
+                    st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
             else:
-                st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
-        else:
-            st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+                st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+        # --- FIN CORRECCIÓN v2.6.16 ---
+        
+        # --- Lógica de Resumen (para otras páginas que no son 'principal') ---
+        if page_key != "principal":
+            st.markdown("---")
+            agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
+            titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
+
+            st.subheader(f"👥 {titulo_resumen}")
+            if agrupar_por in df_page_data.columns:
+                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por)
+                if not resumen.empty and 'Supervisor' in resumen.columns and agrupar_por != 'Supervisor':
+                    resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True)
+
+                if not resumen.empty:
+                    st.dataframe(resumen, use_container_width=True, hide_index=True)
+                    excel_data_resumen_sup = to_excel(resumen)
+                    if excel_data_resumen_sup:
+                        st.download_button(
+                            label=f"📥 Descargar {titulo_resumen}",
+                            data=excel_data_resumen_sup,
+                            file_name=f"{page_key}_resumen_{agrupar_por.lower()}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key=f"{page_key}_download_resumen" # Key única
+                        )
+                else:
+                    st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
+            else:
+                st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
 
         # --- NUEVA UBICACIÓN GRÁFICO (v2.6.13) ---
         if page_key == "rendimiento":
@@ -1265,9 +1298,37 @@ if menu == "🏠 Principal":
         # Calcular KPIs para el Supervisor
         kpis_supervisor = calcular_kpis(df_unicos, df)
         
-        # MODIFICADO: Pasa page_key="principal" para mostrar los 10 KPIs
+        # 1. Mostrar KPIs
         display_kpi_metrics(kpis_supervisor, page_key="principal", critical_metric_key='Pendientes')
         
+        # --- INICIA CORRECCIÓN v2.6.16: AÑADIR RESUMEN A 'PRINCIPAL' ---
+        st.markdown("---")
+        agrupar_por = 'Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Asignado_A'
+        titulo_resumen = 'Resumen por Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Resumen por Técnico'
+
+        st.subheader(f"👥 {titulo_resumen}")
+        if agrupar_por in df_unicos.columns:
+            resumen = crear_resumen_admin(df_unicos, agrupar_por=agrupar_por)
+            if not resumen.empty and 'Supervisor' in resumen.columns and agrupar_por != 'Supervisor':
+                resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True)
+
+            if not resumen.empty:
+                st.dataframe(resumen, use_container_width=True, hide_index=True)
+                excel_data_resumen_sup = to_excel(resumen)
+                if excel_data_resumen_sup:
+                    st.download_button(
+                        label=f"📥 Descargar {titulo_resumen}",
+                        data=excel_data_resumen_sup,
+                        file_name=f"principal_resumen_{agrupar_por.lower()}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        key=f"principal_download_resumen" # Key única
+                    )
+            else:
+                st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
+        else:
+            st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+        # --- FIN CORRECCIÓN v2.6.16 ---
+
         st.markdown("---")
         st.subheader("🗂️ Tabla de Tickets (Estado más reciente)")
 
@@ -1559,12 +1620,30 @@ elif menu == "🔍 Tracking Ticket":
         st.markdown("---")
         st.subheader("🕐 Tickets Recientes (Últimos 10 cambios)")
 
+        tickets_recientes_base = pd.DataFrame()
+        
+        # --- INICIA CORRECCIÓN v2.6.16: FILTRAR RECIENTES POR SUPERVISOR ---
+        # 1. Definir el dataframe base (historial completo del día)
+        if df is not None and not df.empty:
+            tickets_recientes_base = df.copy()
+        
+            # 2. Aplicar el filtro de supervisor, si aplica
+            supervisor_filter = None
+            if st.session_state.user_role == "supervisor":
+                supervisor_filter = st.session_state.supervisor_id
+            elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
+                supervisor_filter = supervisor_sel
+                
+            if supervisor_filter and 'Supervisor' in tickets_recientes_base.columns:
+                tickets_recientes_base = tickets_recientes_base[tickets_recientes_base['Supervisor'].astype(str) == str(supervisor_filter)]
+        # --- FIN CORRECCIÓN v2.6.16 ---
+
         tickets_recientes = pd.DataFrame()
-        # Usar df (historial completo del día) para mostrar los últimos *cambios*
-        if df is not None and not df.empty and 'Timestamp_Procesado' in df.columns and pd.api.types.is_datetime64_any_dtype(df['Timestamp_Procesado']):
-            tickets_recientes = df.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
-        elif df is not None and not df.empty: # Fallback si no hay timestamp
-            tickets_recientes = df.tail(10)
+        # 3. Ordenar y tomar los 10 más recientes del dataframe *filtrado*
+        if not tickets_recientes_base.empty and 'Timestamp_Procesado' in tickets_recientes_base.columns and pd.api.types.is_datetime64_any_dtype(tickets_recientes_base['Timestamp_Procesado']):
+            tickets_recientes = tickets_recientes_base.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
+        elif not tickets_recientes_base.empty: # Fallback si no hay timestamp
+            tickets_recientes = tickets_recientes_base.tail(10)
 
 
         if not tickets_recientes.empty:
