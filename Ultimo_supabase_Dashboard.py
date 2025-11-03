@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # El tema se carga desde .streamlit/config.toml
-st.set_page_config(page_title="Dashboard Trabajos S", layout="wide")
+st.set_page_config(page_title="Dashboard Trabajos S - v2.6.11", layout="wide") # Título actualizado
 
 # --------------------------
 # Sistema de Login
@@ -1490,7 +1490,7 @@ elif menu == "📅 Antiguas":
         fecha_limite = hoy - timedelta(days=3)
         df_extrema = pd.DataFrame()
         if not df_unicos_antiguedad.empty:
-            # --- AQUÍ ESTÁ LA CORRECCIÓN v2.6.10 ---
+            # --- AQUÍ ESTÁ LA CORRECCIÓN v2.6.11 (corregido de v2.6.10) ---
             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
             # --- FIN DE LA CORRECCIÓN ---
                 df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
@@ -1507,37 +1507,51 @@ elif menu == "📅 Antiguas":
             critical_metric_key='Total'
         )
 
+# --- INICIA BLOQUE CORREGIDO v2.6.11 ---
 elif menu == "📈 Rendimiento":
     st.title(f"📈 Análisis de Rendimiento - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Esta página filtra los tickets por la fecha y hora en que fueron PROCESADOS hoy.")
 
     col_date1, col_date2 = st.columns(2)
-    fecha_inicio_default = datetime.now().date() - timedelta(days=30)
-    fecha_fin_default = datetime.now().date()
-    fecha_inicio = col_date1.date_input("Fecha Inicio", fecha_inicio_default)
-    fecha_fin = col_date2.date_input("Fecha Fin", fecha_fin_default)
+    
+    # El default es HOY, porque la tabla solo tiene datos de hoy
+    fecha_hoy = datetime.now().date()
+    fecha_inicio_seleccionada = col_date1.date_input("Fecha Inicio", fecha_hoy)
+    fecha_fin_seleccionada = col_date2.date_input("Fecha Fin", fecha_hoy)
+    
+    # Añadir filtros de HORA para el Timestamp
+    hora_inicio = col_date1.time_input("Hora Inicio", time(0, 0)) # 00:00
+    hora_fin = col_date2.time_input("Hora Fin", time(23, 59, 59)) # 23:59:59
+    
+    # Combinar
+    dt_inicio = datetime.combine(fecha_inicio_seleccionada, hora_inicio)
+    dt_fin = datetime.combine(fecha_fin_seleccionada, hora_fin)
 
     df_rendimiento = pd.DataFrame()
 
-    if df_unicos is not None and not df_unicos.empty and 'OE_Creacion' in df_unicos.columns:
+    # Usamos Timestamp_Procesado en lugar de OE_Creacion
+    if df_unicos is not None and not df_unicos.empty and 'Timestamp_Procesado' in df_unicos.columns:
         df_rendimiento_base = df_unicos.copy()
-        if not pd.api.types.is_datetime64_any_dtype(df_rendimiento_base['OE_Creacion']):
-            df_rendimiento_base['OE_Creacion'] = pd.to_datetime(df_rendimiento_base['OE_Creacion'], errors='coerce')
-        df_rendimiento_base = df_rendimiento_base.dropna(subset=['OE_Creacion'])
+        
+        # Asegurar que Timestamp_Procesado es datetime
+        if not pd.api.types.is_datetime64_any_dtype(df_rendimiento_base['Timestamp_Procesado']):
+            df_rendimiento_base['Timestamp_Procesado'] = pd.to_datetime(df_rendimiento_base['Timestamp_Procesado'], errors='coerce')
+        
+        # Dropear solo si el TIMESTAMP (no la OE_Creacion) es nulo
+        df_rendimiento_base = df_rendimiento_base.dropna(subset=['Timestamp_Procesado']) 
 
         try:
-            if fecha_inicio <= fecha_fin:
-                fecha_inicio_dt = pd.to_datetime(fecha_inicio).replace(tzinfo=None)
-                fecha_fin_dt = (pd.to_datetime(fecha_fin) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)).replace(tzinfo=None)
-
-                if df_rendimiento_base['OE_Creacion'].dt.tz is not None:
-                    df_rendimiento_base['OE_Creacion'] = df_rendimiento_base['OE_Creacion'].dt.tz_convert(None)
+            if dt_inicio <= dt_fin:
+                # Quitar timezone si existe (buena práctica)
+                if df_rendimiento_base['Timestamp_Procesado'].dt.tz is not None:
+                    df_rendimiento_base['Timestamp_Procesado'] = df_rendimiento_base['Timestamp_Procesado'].dt.tz_convert(None)
 
                 df_rendimiento = df_rendimiento_base[
-                    (df_rendimiento_base['OE_Creacion'] >= fecha_inicio_dt) &
-                    (df_rendimiento_base['OE_Creacion'] <= fecha_fin_dt)
+                    (df_rendimiento_base['Timestamp_Procesado'] >= dt_inicio) &  # <--- LÓGICA CORREGIDA
+                    (df_rendimiento_base['Timestamp_Procesado'] <= dt_fin)    # <--- LÓGICA CORREGIDA
                 ].copy()
             else:
-                st.error("La fecha de inicio no puede ser posterior a la fecha de fin.")
+                st.error("La fecha/hora de inicio no puede ser posterior a la fecha/hora de fin.")
                 df_rendimiento = pd.DataFrame()
 
         except Exception as e:
@@ -1545,7 +1559,7 @@ elif menu == "📈 Rendimiento":
             df_rendimiento = pd.DataFrame()
 
     if df_rendimiento.empty:
-        st.warning("No hay datos en el período seleccionado con los filtros actuales.")
+        st.warning("No hay datos en el rango de fecha/hora seleccionado con los filtros actuales.")
     else:
         render_dashboard_page(
             title_prefix="Rendimiento",
@@ -1555,5 +1569,6 @@ elif menu == "📈 Rendimiento":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="rendimiento" # MODIFICADO: Pasa la clave de la página
+            page_key="rendimiento" 
         )
+# --- FIN BLOQUE CORREGIDO v2.6.11 ---
