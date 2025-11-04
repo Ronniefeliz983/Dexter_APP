@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 # Configuración de la página
 # --------------------------
 # --- TÍTULO ACTUALIZADO ---
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.1", layout="wide")
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.2", layout="wide")
 
 # --- CSS PARA MÓVILES ---
 st.markdown("""
@@ -346,7 +346,7 @@ def denormalizar_columnas_desde_sql(df_sql):
     return df_csv[columnas_esperadas_presentes]
 
 # --------------------------
-# Carga y Procesamiento de Datos (MODIFICADO v2.7.0)
+# Carga y Procesamiento de Datos (CORREGIDO v2.7.2)
 # --------------------------
 @st.cache_data(ttl=60)
 def cargar_datos():
@@ -382,15 +382,27 @@ def cargar_datos():
     for col in df.columns.intersection(columnas_texto_clave):
         df[col] = df[col].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
 
-    columnas_fechas_a_procesar = ['Creado', 'OE_Creacion', 'OE Vence', 'OE_Vencimiento', 'Vence', 'Timestamp_Procesado']
+    # --- INICIA CORRECCIÓN v2.7.2 ---
+    columnas_fechas_a_procesar = ['Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Timestamp_Procesado']
     for col in df.columns.intersection(columnas_fechas_a_procesar):
         df[f'{col}_Original'] = df[col].astype(str).replace('NaT', None)
-        df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
+        
+        # 1. Usar 'dayfirst=True' y 'format='mixed'' para manejar los strings de KUNAI
+        df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True, format='mixed')
+        
+        # 2. Convertir a AST (UTC-4) y hacerlo naive
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             try:
-                df[col] = df[col].dt.tz_convert('Etc/GMT+4').dt.tz_localize(None)
+                # Si la fecha ya tiene timezone (ej. UTC de Supabase), convertir
+                if df[col].dt.tz is not None:
+                     df[col] = df[col].dt.tz_convert('Etc/GMT+4').dt.tz_localize(None)
+                else:
+                # Si es naive (leído de un string), localizar a AST y luego quitar
+                     df[col] = df[col].dt.tz_localize('Etc/GMT+4', ambiguous='infer').dt.tz_localize(None)
             except Exception:
+                 # Fallback por si algo falla
                  df[col] = df[col].dt.tz_localize(None)
+    # --- FIN CORRECCIÓN v2.7.2 ---
 
     if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
         mask_valid_oe = df['OE_Creacion'].notna()
@@ -407,15 +419,9 @@ def cargar_datos():
             df['PYME'] = df['PYME'].fillna(False).astype(bool)
             df['Es_PYME_Negocio'] = df['PYME'] & es_negocio
         else:
-            df['PYME'] = False
-            df['Vence en'] = pd.NaT
-            df['Vencido'] = False
-            df['Es_PYME_Negocio'] = False
+            df['PYME'] = False; df['Vence en'] = pd.NaT; df['Vencido'] = False; df['Es_PYME_Negocio'] = False
     else:
-        df['PYME'] = False
-        df['Vence en'] = pd.NaT
-        df['Vencido'] = False
-        df['Es_PYME_Negocio'] = False
+        df['PYME'] = False; df['Vence en'] = pd.NaT; df['Vencido'] = False; df['Es_PYME_Negocio'] = False
 
     if 'Vencido' not in df.columns:
         df['Vencido'] = False
@@ -447,7 +453,6 @@ else:
            'OrdenExterna' in df_full_historial.columns:
 
             # 2. Encontrar el PRIMER timestamp (el MÍNIMO) para CADA ticket en TODO el historial
-            # Esto crea una nueva columna 'Fecha_Nacimiento'
             df_full_historial['Fecha_Nacimiento'] = df_full_historial.groupby('OrdenExterna')['Timestamp_Procesado'].transform('min')
 
             # 3. Crear el DataFrame 'df' (para el dashboard) filtrando solo los tickets
@@ -456,7 +461,6 @@ else:
             
             if df.empty:
                 st.info(f"ℹ️ No hay tickets **nuevos** registrados en el día de hoy ({fecha_hoy.strftime('%d/%m/%Y')}).")
-                # df = pd.DataFrame(columns=df_full_historial.columns) # Crear df vacío pero con columnas
         else:
             st.error("Columnas 'Timestamp_Procesado' u 'OrdenExterna' son inválidas. No se puede filtrar por 'Nuevos Hoy'.")
             df = pd.DataFrame(columns=df_full_historial.columns)
@@ -493,7 +497,6 @@ def obtener_datos_unicos(df_input):
         result = df_temp.drop_duplicates(subset=['OrdenExterna'], keep='first')
         return result
     else:
-        # Lógica estándar: ordenar por timestamp descendente y tomar el primero
         df_temp = df_input.dropna(subset=['OrdenExterna', 'Timestamp_Procesado'])
         df_sorted = df_temp.sort_values('Timestamp_Procesado', ascending=False)
         result = df_sorted.drop_duplicates(subset=['OrdenExterna'], keep='first')
@@ -505,10 +508,13 @@ def formatear_para_display(df_input):
         return df_input
     df_display = df_input.copy()
     
+    # --- INICIA CORRECCIÓN v2.7.2 ---
     columnas_fechas_a_procesar = [
-        'Creado', 'OE_Creacion', 'OE Vence', 'OE_Vencimiento', 'Vence en', 
-        'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento' # <-- Añadida
+        'Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Vence en', 
+        'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento'
     ]
+    # --- FIN CORRECCIÓN v2.7.2 ---
+    
     columnas_fechas_presentes = df_display.columns.intersection(columnas_fechas_a_procesar)
 
     for col in columnas_fechas_presentes:
@@ -518,6 +524,7 @@ def formatear_para_display(df_input):
             except Exception:
                 df_display[col] = df_display[col].astype(str).replace('NaT', None)
         else:
+            # Si no es datetime (ej. 'NaT' que falló la conversión), limpiar
             df_display[col] = df_display[col].astype(str).replace('nan', None).replace('NaT', None).replace('<NA>', None).replace('None',None)
 
     for col in df_display.columns:
@@ -616,7 +623,6 @@ def filtrar_dataframe_con_historial(df_completo_historial, df_unicos_para_buscar
     if df_completo_historial is None or df_completo_historial.empty:
         return pd.DataFrame()
 
-    # Si no hay texto de búsqueda, solo devolvemos los únicos (que ya están filtrados)
     if not texto_busqueda:
         return df_unicos_para_buscar if df_unicos_para_buscar is not None else pd.DataFrame(columns=df_completo_historial.columns)
 
@@ -646,7 +652,6 @@ def filtrar_dataframe_con_historial(df_completo_historial, df_unicos_para_buscar
         st.error("Error crítico: df_completo_historial no tiene 'OrdenExterna'.")
         return pd.DataFrame(columns=df_completo_historial.columns)
 
-    # Filtramos el historial COMPLETO (df_completo_historial) por los IDs encontrados
     df_historial = df_completo_historial[df_completo_historial['OrdenExterna'].isin(tickets_encontrados)].copy()
 
     if supervisor_filter and 'Supervisor' in df_historial.columns:
@@ -722,7 +727,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         col1, col2, col3, col4, col5 = st.columns(5)
         
         if st.session_state.user_role == "admin":
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total') # <-- Título actualizado
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
@@ -736,7 +741,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col9, "📅 Citados", 'Citados')
             metric_with_critical(col10, "🔄 Rebote", 'Rebote')
         else: 
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total') # <-- Título actualizado
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
@@ -752,7 +757,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
     else: 
         col1, col2, col3, col4 = st.columns(4)
         if st.session_state.user_role == "admin":
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total') # <-- Título actualizado
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
@@ -763,7 +768,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col7, "📅 Citados", 'Citados')
             metric_with_critical(col8, "🔄 Rebote", 'Rebote')
         else:
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total') # <-- Título actualizado
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col4, "📤 Referidos", 'Referidos')
@@ -784,12 +789,12 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
     busqueda_key = f"buscar_{page_key}"
     texto_busqueda = st.text_input("🔍 Buscar en tabla", key=busqueda_key, placeholder="Buscar por Orden Externa, Cliente, Asignado...")
 
-    # df_display_original son los únicos de HOY (los que nacieron hoy)
     df_display_original = formatear_para_display(df_data_unicos_hoy.copy() if df_data_unicos_hoy is not None else pd.DataFrame())
 
     if texto_busqueda:
         # --- Lógica de Búsqueda (v2.7.1) ---
-        # Busca en los únicos de HOY (df_data_unicos_hoy) y devuelve el historial COMPLETO (de df_full_historial)
+        # ¡IMPORTANTE! La búsqueda en el dashboard principal AHORA SOLO BUSCA en los tickets NUEVOS DE HOY.
+        # Solo la página de "Tracking" busca en todo.
         supervisor_filter = None
         if role == "supervisor":
             supervisor_filter = role_supervisor_id
@@ -805,7 +810,6 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
         )
         df_display_final = formatear_para_display(df_display_filtrado)
     else:
-        # Si no hay búsqueda, muestra los únicos de HOY
         df_display_final = df_display_original
 
     st.dataframe(df_display_final, use_container_width=True, hide_index=True)
@@ -826,7 +830,6 @@ def render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key="h
     st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
     try:
         df_grafico = df_page_data.copy()
-        # Asegurar que la hora se extrae del timestamp (que ya es de hoy)
         df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
         
         def agg_kpis_por_hora(group):
@@ -1470,7 +1473,6 @@ elif menu == "🔍 Tracking Ticket":
 
         tickets_recientes_base = pd.DataFrame()
         
-        # --- LÓGICA RECIENTES (v2.7.1): Usar el historial COMPLETO filtrado ---
         if not df_supervisor_unicos_MASTER.empty and 'OrdenExterna' in df_supervisor_unicos_MASTER.columns:
             ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
             tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
@@ -1479,7 +1481,6 @@ elif menu == "🔍 Tracking Ticket":
         elif not df_supervisor_unicos_MASTER.empty: # Fallback para admin con filtro
              ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
              tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
-        # --- FIN LÓGICA RECIENTES ---
 
         tickets_recientes = pd.DataFrame()
         if not tickets_recientes_base.empty and 'Timestamp_Procesado' in tickets_recientes_base.columns and pd.api.types.is_datetime64_any_dtype(tickets_recientes_base['Timestamp_Procesado']):
