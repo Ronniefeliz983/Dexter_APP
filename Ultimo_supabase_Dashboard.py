@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.8", layout="wide")
+st.set_page_config(page_title="Dashboard Trabajos S - v2.8.0", layout="wide")
 
 # --- CSS PARA MÓVILES ---
 st.markdown("""
@@ -154,64 +154,35 @@ def calcular_vencido(row):
         return False
 
 
+# --- FUNCIÓN DE KPI MODIFICADA v2.8.0 ---
 @st.cache_data(ttl=300)
-def get_earliest_batch_initial_cohort(df_full_historial):
+def get_initial_cohort_from_snapshot(df_snapshot):
     """
-    Identifica los tickets que estaban 'activo' o 'iniciado' en el
-    *primer lote procesado* (lote_procesado == min) del DÍA DE HOY.
-    Devuelve un set de IDs (OrdenExterna).
+    Simplemente cuenta los tickets 'activo' o 'iniciado' del snapshot.
     """
-    
-    if (df_full_historial is None or df_full_historial.empty or
-        'OrdenExterna' not in df_full_historial.columns or
-        'Estado' not in df_full_historial.columns or
-        'lote_procesado' not in df_full_historial.columns or
-        'Timestamp_Procesado' not in df_full_historial.columns or 
-        not pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado'])
-        ):
-        return set()
+    if (df_snapshot is None or df_snapshot.empty or
+        'OrdenExterna' not in df_snapshot.columns or
+        'Estado' not in df_snapshot.columns):
+        return set() # Devuelve un set vacío
 
     try:
-        ahora_ast_naive = get_current_ast_time()
-        fecha_hoy = ahora_ast_naive.date()
-        
-        df_historial_hoy = df_full_historial[df_full_historial['Timestamp_Procesado'].dt.date == fecha_hoy].copy()
-        
-        if df_historial_hoy.empty:
-            return set()
-
-        lotes_numericos = pd.to_numeric(df_historial_hoy['lote_procesado'], errors='coerce')
-        
-        if lotes_numericos.isna().all():
-            return set()
-            
-        min_lote = lotes_numericos.min()
-        
-        if pd.isna(min_lote):
-            return set()
-
-        df_earliest_batch = df_historial_hoy[lotes_numericos == min_lote].copy()
-        
-        if df_earliest_batch.empty:
-            return set()
-
-        df_initial_active_in_snapshot = df_earliest_batch[
-            df_earliest_batch['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+        df_initial_active = df_snapshot[
+            df_snapshot['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
         ]
-        
-        initial_cohort_ids = set(df_initial_active_in_snapshot['OrdenExterna'].unique())
+        initial_cohort_ids = set(df_initial_active['OrdenExterna'].unique())
         return initial_cohort_ids
         
     except Exception as e:
-        st.error(f"Error en get_earliest_batch_initial_cohort: {e}")
+        st.error(f"Error en get_initial_cohort_from_snapshot: {e}")
         return set()
 
-
-def calcular_kpis(df, df_full_historial):
+# --- FUNCIÓN KPI MODIFICADA v2.8.0 ---
+def calcular_kpis(df, df_snapshot, df_full_historial):
     """
     Calcula los KPIs.
-    df = DataFrame de estados únicos/actuales (filtrado por página/rol).
-    df_full_historial = DataFrame con todo el historial (de todas las fechas).
+    df = DataFrame de estados únicos (Pendientes + Cerrados Hoy).
+    df_snapshot = DataFrame del snapshot_hoy (para KPIs 'Iniciado').
+    df_full_historial = DataFrame con todo el historial (para 'Eficiencia Inicial').
     """
     default_kpis = {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
@@ -224,6 +195,7 @@ def calcular_kpis(df, df_full_historial):
     df_kpi = df.copy()
     df_kpi['Estado'] = df_kpi['Estado'].fillna('desconocido').astype(str).str.lower()
 
+    # --- KPIs Estándar (Basados en la vista principal 'df') ---
     total = len(df_kpi)
     cerrados = df_kpi[df_kpi['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
     referidos = df_kpi[df_kpi['Estado'] == 'pend trab interno'].shape[0]
@@ -233,27 +205,41 @@ def calcular_kpis(df, df_full_historial):
     manejados = cerrados + referidos + citados + rebote
     eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
 
+    # --- KPIs 'Inicial' (Basados en 'df_snapshot') ---
     total_iniciado_en_pagina = 0
     manejados_inicial_en_pagina = 0
     eficiencia_inicial = 0.0
 
-    global_initial_cohort_ids = get_earliest_batch_initial_cohort(df_full_historial)
+    # 1. Obtener el "grupo" de IDs del SNAPSHOT
+    global_initial_cohort_ids = get_initial_cohort_from_snapshot(df_snapshot)
 
     if global_initial_cohort_ids:
         try:
+            # 2. Obtener los tickets en la *página actual* (filtrada por supervisor, etc.)
+            # Nota: df_kpi ya está filtrado por supervisor (en la lógica principal)
             tickets_en_pagina_actual_ids = set(df_kpi['OrdenExterna'].unique())
+
+            # 3. Encontrar la INTERSECCIÓN: Tickets del cohort inicial que están en esta página.
             cohort_tickets_in_current_page_ids = global_initial_cohort_ids.intersection(tickets_en_pagina_actual_ids)
-            total_iniciado_en_pagina = len(cohort_tickets_in_current_page_ids)
+            total_iniciado_en_pagina = len(cohort_tickets_in_current_page_ids) # <-- KPI 'Total Iniciado'
 
             if total_iniciado_en_pagina > 0:
-                df_kpi_del_cohort_intersectado = df_kpi[df_kpi['OrdenExterna'].isin(cohort_tickets_in_current_page_ids)]
-
-                cerrados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
-                referidos_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'pend trab interno'].shape[0]
-                citados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-                rebote_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'validacion int'].shape[0]
+                # 4. Para la eficiencia, necesitamos el *estado actual* de este grupo,
+                #    que leemos del 'df_full_historial'
+                df_ultimo_estado_historial = obtener_datos_unicos(df_full_historial)
+                df_kpi_del_cohort_en_historial = df_ultimo_estado_historial[
+                    df_ultimo_estado_historial['OrdenExterna'].isin(cohort_tickets_in_current_page_ids)
+                ]
+                
+                # 5. Contar cuántos de *ese grupo* están ahora manejados
+                cerrados_inicial = df_kpi_del_cohort_en_historial[df_kpi_del_cohort_en_historial['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
+                referidos_inicial = df_kpi_del_cohort_en_historial[df_kpi_del_cohort_en_historial['Estado'] == 'pend trab interno'].shape[0]
+                citados_inicial = df_kpi_del_cohort_en_historial[df_kpi_del_cohort_en_historial['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
+                rebote_inicial = df_kpi_del_cohort_en_historial[df_kpi_del_cohort_en_historial['Estado'] == 'validacion int'].shape[0]
                 
                 manejados_inicial_en_pagina = cerrados_inicial + referidos_inicial + citados_inicial + rebote_inicial
+                
+                # 6. Calcular Eficiencia_Inicial
                 eficiencia_inicial = round(manejados_inicial_en_pagina * 100 / total_iniciado_en_pagina, 1)
 
         except Exception as e:
@@ -275,6 +261,7 @@ def calcular_kpis(df, df_full_historial):
         'Manejados_Inicial': manejados_inicial_en_pagina, 
         'Eficiencia_Inicial': eficiencia_inicial 
     }
+# --- FIN FUNCIÓN KPI MODIFICADA ---
 
 # --- FUNCIONES DE CONEXIÓN A DB ---
 @st.cache_resource
@@ -339,7 +326,7 @@ def denormalizar_columnas_desde_sql(df_sql):
     return df_csv[columnas_esperadas_presentes]
 
 @st.cache_data(ttl=60)
-def cargar_datos():
+def cargar_datos_historial():
     """Carga datos desde la tabla 'historial_cambios' de Supabase."""
     
     engine = get_database_engine()
@@ -363,7 +350,7 @@ def cargar_datos():
             return pd.DataFrame()
 
     except Exception as e:
-        st.error(f"❌ Error al cargar datos desde Supabase: {e}")
+        st.error(f"❌ Error al cargar datos desde Supabase (historial_cambios): {e}")
         return pd.DataFrame()
 
     df.columns = df.columns.str.strip()
@@ -412,6 +399,38 @@ def cargar_datos():
         df['Vencido'] = df['Vencido'].fillna(False).astype(bool)
     
     return df
+
+# --- NUEVA FUNCIÓN DE CARGA v2.8.0 ---
+@st.cache_data(ttl=60)
+def cargar_datos_snapshot():
+    """Carga datos desde la tabla 'snapshot_hoy' de Supabase."""
+    
+    engine = get_database_engine()
+    if engine is None:
+        return pd.DataFrame()
+
+    try:
+        query = text("SELECT * FROM snapshot_hoy") 
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        
+        if df_sql.empty:
+            st.warning("La tabla 'snapshot_hoy' está vacía. El KPI 'Total Iniciado' será 0.")
+            return pd.DataFrame()
+
+        df = denormalizar_columnas_desde_sql(df_sql)
+        
+        if df.empty:
+            return pd.DataFrame()
+            
+        # Limpieza simple de estado
+        df['Estado'] = df['Estado'].astype(str).str.strip().str.lower().replace('nan', None)
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Error al cargar datos desde Supabase (snapshot_hoy): {e}")
+        return pd.DataFrame()
+
 
 # --- FUNCIONES DE MANIPULACIÓN DE DATOS ---
 def obtener_datos_unicos(df_input):
@@ -643,7 +662,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         if st.session_state.user_role == "admin":
             metric_with_critical(col1, kpi_title, 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-            metric_with_critical(col3, "🚀 Total Iniciado (Hoy)", 'Total_Iniciado')
+            metric_with_critical(col3, "🚀 Total Iniciado (Snapshot)", 'Total_Iniciado') 
             metric_with_critical(col4, "✅ Cerrados (Hoy)", 'Cerrados')
             metric_with_critical(col5, "🔄 Total Manejado (Hoy)", 'Manejados')
             col6, col7, col8, col9, col10 = st.columns(5)
@@ -657,7 +676,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         else: 
             metric_with_critical(col1, kpi_title, 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-            metric_with_critical(col3, "🚀 Total Iniciado (Hoy)", 'Total_Iniciado')
+            metric_with_critical(col3, "🚀 Total Iniciado (Snapshot)", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados (Hoy)", 'Cerrados')
             metric_with_critical(col5, "📤 Referidos", 'Referidos')
             col6, col7, col8, col9, col10 = st.columns(5)
@@ -733,7 +752,7 @@ def display_detail_table(df_data_filtrada, df_full_historial, df_unicos_para_bus
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
 
-def render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key="hourly_efficiency_chart"):
+def render_hourly_efficiency_chart(df_page_data, df_snapshot, df_full_historial, chart_key="hourly_efficiency_chart"):
     """Calcula y renderiza el gráfico de eficiencia por hora."""
     st.markdown("---")
     st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
@@ -750,7 +769,7 @@ def render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key="h
         df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
         
         def agg_kpis_por_hora(group):
-            kpis_group = calcular_kpis(group, df_full_historial) 
+            kpis_group = calcular_kpis(group, df_snapshot, df_full_historial) 
             return pd.Series(kpis_group)
 
         resumen_hora = df_grafico.groupby('Hora').apply(agg_kpis_por_hora).reset_index()
@@ -784,10 +803,11 @@ def render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key="h
         st.error(traceback.format_exc())
 
 
-def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unicos_para_buscar, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None):
+def render_dashboard_page(title_prefix, df_page_data, df_snapshot, df_full_historial, df_unicos_para_buscar, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None):
     """
     Función genérica para renderizar una página del dashboard.
     df_page_data = Datos únicos (Pendientes + Cerrados Hoy), ya filtrados.
+    df_snapshot = Datos del snapshot_hoy (para KPIs 'Iniciado')
     df_full_historial = El historial COMPLETO de todas las fechas.
     df_unicos_para_buscar = El pool de búsqueda (la lista master de únicos del supervisor).
     """
@@ -795,7 +815,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unic
         st.warning(f"No hay tickets para mostrar en '{title_prefix}' con los filtros actuales.")
         return
 
-    kpis = calcular_kpis(df_page_data, df_full_historial)
+    kpis = calcular_kpis(df_page_data, df_snapshot, df_full_historial)
 
     # --- Vista Admin ---
     if role == "admin":
@@ -812,7 +832,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unic
             col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
             col_kpi1.metric("Total (Pendientes + Cerrados Hoy)", total_tickets_admin)
             col_kpi2.metric("Eficiencia Total", f"{eficiencia_kpi_admin:.1f}%")
-            col_kpi3.metric("Total Iniciado (Hoy)", total_iniciado_admin)
+            col_kpi3.metric("Total Iniciado (Snapshot)", total_iniciado_admin)
             col_kpi4.metric("Eficiencia Inicial", f"{eficiencia_inicial_admin:.1f}%")
             col_kpi5.metric("Cerrados (Hoy)", cerrados_admin)
             col_kpi6.metric("Pendiente", pendientes_admin_kpi)
@@ -908,7 +928,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unic
                         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     )
                 if page_key == "rendimiento":
-                    render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
+                    render_hourly_efficiency_chart(df_page_data, df_snapshot, df_full_historial, chart_key=f"{page_key}_hourly_chart")
             except Exception as e:
                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
                 if not resumen_admin.empty:
@@ -933,7 +953,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unic
             st.info("No hay datos de 'Asignado_A' para mostrar resumen.")
         
         if page_key == "rendimiento":
-            render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
+            render_hourly_efficiency_chart(df_page_data, df_snapshot, df_full_historial, chart_key=f"{page_key}_hourly_chart")
 
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
@@ -969,7 +989,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unic
                 st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
 
         if page_key == "rendimiento":
-            render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
+            render_hourly_efficiency_chart(df_page_data, df_snapshot, df_full_historial, chart_key=f"{page_key}_hourly_chart")
 
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
@@ -977,11 +997,12 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, df_unic
 
 
 # ==============================================================================
-# --- SECCIÓN 2: LÓGICA PRINCIPAL Y SIDEBAR (v2.7.8) ---
+# --- SECCIÓN 2: LÓGICA PRINCIPAL Y SIDEBAR (v2.8.0) ---
 # ==============================================================================
 
 # 1. Carga de datos
-df_full_historial = cargar_datos()
+df_full_historial = cargar_datos_historial()
+df_snapshot = cargar_datos_snapshot() # <-- NUEVA CARGA
 
 # Definir estados finales
 ESTADOS_FINALES = ['cerrado', 'validacion ext']
@@ -1044,6 +1065,19 @@ else:
     
     else:
         df_unicos_base = pd.DataFrame(columns=df_full_historial.columns)
+        
+    # --- INICIO CAMBIO v2.8.0 ---
+    # 5b. Filtrar el SNAPSHOT por supervisor
+    df_snapshot_filtrado = df_snapshot.copy()
+    if not df_snapshot_filtrado.empty:
+        if st.session_state.user_role == "supervisor":
+            if 'Supervisor' in df_snapshot_filtrado.columns:
+                df_snapshot_filtrado = df_snapshot_filtrado[df_snapshot_filtrado['Supervisor'].astype(str) == str(st.session_state.supervisor_id)]
+        elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
+            if 'Supervisor' in df_snapshot_filtrado.columns:
+                df_snapshot_filtrado = df_snapshot_filtrado[df_snapshot_filtrado['Supervisor'].astype(str) == str(supervisor_sel)]
+    # --- FIN CAMBIO v2.8.0 ---
+
 
     # 6. Llenar opciones de estado y crear el filtro de estado
     estado_options = []
@@ -1076,6 +1110,7 @@ if menu == "🏠 Principal":
     render_dashboard_page(
         title_prefix="Principal",
         df_page_data=df_unicos,
+        df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
         df_full_historial=df_full_historial,
         df_unicos_para_buscar=df_supervisor_unicos_MASTER,
         role=st.session_state.user_role,
@@ -1099,6 +1134,7 @@ elif menu == "📊 Análisis PYMEs":
     render_dashboard_page(
         title_prefix="Análisis PYMEs",
         df_page_data=df_pymes,
+        df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
         df_full_historial=df_full_historial,
         df_unicos_para_buscar=df_pymes_para_buscar,
         role=st.session_state.user_role,
@@ -1124,6 +1160,7 @@ elif menu == "⏰ Puntualidad":
     render_dashboard_page(
         title_prefix="Puntualidad General",
         df_page_data=df_puntuales,
+        df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
         df_full_historial=df_full_historial,
         df_unicos_para_buscar=df_supervisor_unicos_MASTER,
         role=st.session_state.user_role,
@@ -1195,6 +1232,7 @@ elif menu == "🎯 Citas Puntuales":
     render_dashboard_page(
         title_prefix="Citas Puntuales",
         df_page_data=df_citas,
+        df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
         df_full_historial=df_full_historial,
         df_unicos_para_buscar=df_supervisor_unicos_MASTER,
         role=st.session_state.user_role,
@@ -1417,6 +1455,7 @@ elif menu == "📅 Antiguas":
         render_dashboard_page(
             title_prefix="Antigüedad 3 Días",
             df_page_data=df_3_dias,
+            df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
             df_full_historial=df_full_historial,
             df_unicos_para_buscar=df_supervisor_unicos_MASTER,
             role=st.session_state.user_role,
@@ -1436,6 +1475,7 @@ elif menu == "📅 Antiguas":
         render_dashboard_page(
             title_prefix="Antigüedad Extrema",
             df_page_data=df_extrema,
+            df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
             df_full_historial=df_full_historial,
             df_unicos_para_buscar=df_supervisor_unicos_MASTER,
             role=st.session_state.user_role,
@@ -1495,6 +1535,7 @@ elif menu == "📈 Rendimiento":
         render_dashboard_page(
             title_prefix="Rendimiento",
             df_page_data=df_rendimiento,
+            df_snapshot=df_snapshot_filtrado, # <-- Pasa el snapshot
             df_full_historial=df_full_historial,
             df_unicos_para_buscar=df_supervisor_unicos_MASTER,
             role=st.session_state.user_role,
