@@ -1,9 +1,14 @@
 [theme]
-# Colores primarios y de fondo inspirados en la NUEVA imagen (con rojo)
-primaryColor="#e74c3c"
-backgroundColor="#1e1e1e"
-secondaryBackgroundColor="#2a2a2a"
-textColor="#ffffff"
+# Azul brillante para elementos interactivos (basado en la imagen)
+primaryColor="#0078d4"
 
-# Fuente base (usaremos Roboto, una fuente muy clara y moderna)
-font="Roboto"
+# Fondo principal en un gris muy claro
+backgroundColor="#f0f2f6"
+
+# Sidebar y contenedores ("cuadros") en blanco puro
+secondaryBackgroundColor="#ffffff"
+
+# Texto en un gris oscuro para legibilidad
+textColor="#31333F"
+
+font="sans serif"
