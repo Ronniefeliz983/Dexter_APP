@@ -19,7 +19,8 @@ import plotly.graph_objects as go
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.8.1", layout="wide")
+# --- CAMBIO: Versión actualizada ---
+st.set_page_config(page_title="Dashboard Trabajos S - v2.8.2", layout="wide")
 
 # --- CSS PARA MÓVILES ---
 st.markdown("""
@@ -159,6 +160,7 @@ def calcular_vencido(row):
 def get_initial_cohort_from_snapshot(df_snapshot):
     """
     Simplemente cuenta los tickets 'activo' o 'iniciado' del snapshot.
+    (Ahora lee de df_snapshot que es 'snapshot_lote_1')
     """
     if (df_snapshot is None or df_snapshot.empty or
         'OrdenExterna' not in df_snapshot.columns or
@@ -181,7 +183,7 @@ def calcular_kpis(df, df_snapshot, df_full_historial):
     """
     Calcula los KPIs.
     df = DataFrame de estados únicos (Vista Principal: Pendientes + Manejados Hoy).
-    df_snapshot = DataFrame del snapshot_hoy (para KPIs 'Iniciado').
+    df_snapshot = DataFrame del snapshot_lote_1 (para KPIs 'Iniciado').
     df_full_historial = DataFrame con todo el historial (para 'Eficiencia Inicial').
     """
     default_kpis = {
@@ -213,7 +215,7 @@ def calcular_kpis(df, df_snapshot, df_full_historial):
     manejados_inicial_en_pagina = 0
     eficiencia_inicial = 0.0
 
-    # 1. Obtener el "grupo" de IDs del SNAPSHOT
+    # 1. Obtener el "grupo" de IDs del SNAPSHOT (LOTE 1)
     global_initial_cohort_ids = get_initial_cohort_from_snapshot(df_snapshot)
 
     if global_initial_cohort_ids:
@@ -308,6 +310,9 @@ def get_column_mappings():
         'cantidad_de_lineas': 'Cantidad_de_lineas', 're_digitada': 'Re_Digitada', 'timestamp_procesado': 'Timestamp_Procesado',
         'fuente_paso': 'Fuente_Paso', 'tipo_evento': 'Tipo_Evento',
         'lote_procesado': 'lote_procesado',
+        # Columnas v2.8+
+        'fecha_nacimiento': 'Fecha_Nacimiento',
+        'timestamp_original_preservado': 'Timestamp_Original_Preservado',
         'id': None, 'fecha_actualizacion': None, 'fecha_registro': None
     }
     return reverse_mapping
@@ -322,9 +327,12 @@ def denormalizar_columnas_desde_sql(df_sql):
     mapeo_valido = {k: v for k, v in COLUMN_MAPPING_REVERSE.items() if v is not None}
     columnas_a_renombrar = {k: v for k, v in mapeo_valido.items() if k in df_sql.columns}
     df_csv = df_sql.rename(columns=columnas_a_renombrar)
-    columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
     
-    return df_csv[columnas_esperadas_presentes]
+    # Asegurar que solo se devuelvan columnas que esperamos
+    columnas_esperadas = list(mapeo_valido.values())
+    columnas_presentes = [col for col in columnas_esperadas if col in df_csv.columns]
+    
+    return df_csv[columnas_presentes]
 
 @st.cache_data(ttl=60)
 def cargar_datos_historial():
@@ -360,7 +368,7 @@ def cargar_datos_historial():
     for col in df.columns.intersection(columnas_texto_clave):
         df[col] = df[col].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
 
-    columnas_fechas_a_procesar = ['Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Timestamp_Procesado']
+    columnas_fechas_a_procesar = ['Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Timestamp_Procesado', 'Fecha_Nacimiento']
     for col in df.columns.intersection(columnas_fechas_a_procesar):
         df[f'{col}_Original'] = df[col].astype(str).replace('NaT', None)
         
@@ -401,21 +409,29 @@ def cargar_datos_historial():
     
     return df
 
+# ==============================================================================
+# --- INICIO DEL CAMBIO v2.8.2 ---
+# ==============================================================================
 @st.cache_data(ttl=60)
 def cargar_datos_snapshot():
-    """Carga datos desde la tabla 'snapshot_hoy' de Supabase."""
+    """
+    Carga datos desde la tabla 'snapshot_lote_1' de Supabase.
+    Esta tabla SOLO contiene el primer despacho del día.
+    """
     
     engine = get_database_engine()
     if engine is None:
         return pd.DataFrame()
 
     try:
-        query = text("SELECT * FROM snapshot_hoy") 
+        # --- CAMBIO CLAVE: Apuntar a la nueva tabla ---
+        query = text("SELECT * FROM snapshot_lote_1") 
+        
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
         
         if df_sql.empty:
-            st.warning("La tabla 'snapshot_hoy' está vacía. El KPI 'Total Iniciado' será 0.")
+            st.warning("La tabla 'snapshot_lote_1' está vacía. El KPI 'Total Iniciado' será 0.")
             return pd.DataFrame()
 
         df = denormalizar_columnas_desde_sql(df_sql)
@@ -427,8 +443,11 @@ def cargar_datos_snapshot():
         return df
 
     except Exception as e:
-        st.error(f"❌ Error al cargar datos desde Supabase (snapshot_hoy): {e}")
+        st.error(f"❌ Error al cargar datos desde Supabase (snapshot_lote_1): {e}")
         return pd.DataFrame()
+# ==============================================================================
+# --- FIN DEL CAMBIO v2.8.2 ---
+# ==============================================================================
 
 
 # --- FUNCIONES DE MANIPULACIÓN DE DATOS ---
@@ -661,7 +680,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         if st.session_state.user_role == "admin":
             metric_with_critical(col1, kpi_title, 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-            metric_with_critical(col3, "🚀 Total Iniciado (Snapshot)", 'Total_Iniciado') 
+            metric_with_critical(col3, "🚀 Total Iniciado (Lote 1)", 'Total_Iniciado') 
             metric_with_critical(col4, "✅ Cerrados (Hoy)", 'Cerrados')
             metric_with_critical(col5, "🔄 Total Manejado (Hoy)", 'Manejados')
             col6, col7, col8, col9, col10 = st.columns(5)
@@ -675,7 +694,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         else: 
             metric_with_critical(col1, kpi_title, 'Total', critical_metric_key == 'Total')
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
-            metric_with_critical(col3, "🚀 Total Iniciado (Snapshot)", 'Total_Iniciado')
+            metric_with_critical(col3, "🚀 Total Iniciado (Lote 1)", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados (Hoy)", 'Cerrados')
             metric_with_critical(col5, "📤 Referidos", 'Referidos')
             col6, col7, col8, col9, col10 = st.columns(5)
@@ -829,7 +848,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_snapshot, df_full_histo
             col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
             col_kpi1.metric("Total (Pendientes + Manejados Hoy)", total_tickets_admin)
             col_kpi2.metric("Eficiencia Total", f"{eficiencia_kpi_admin:.1f}%")
-            col_kpi3.metric("Total Iniciado (Snapshot)", total_iniciado_admin)
+            col_kpi3.metric("Total Iniciado (Lote 1)", total_iniciado_admin)
             col_kpi4.metric("Eficiencia Inicial", f"{eficiencia_inicial_admin:.1f}%")
             col_kpi5.metric("Cerrados (Hoy)", cerrados_admin)
             col_kpi6.metric("Pendiente", pendientes_admin_kpi)
@@ -908,7 +927,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_snapshot, df_full_histo
                         )
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                                   xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                                                  xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
                         st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
                     else:
                         st.info("No hay PYMEs vencidas para mostrar.")
@@ -994,12 +1013,13 @@ def render_dashboard_page(title_prefix, df_page_data, df_snapshot, df_full_histo
 
 
 # ==============================================================================
-# --- SECCIÓN 2: LÓGICA PRINCIPAL Y SIDEBAR (v2.8.0) ---
+# --- SECCIÓN 2: LÓGICA PRINCIPAL Y SIDEBAR (v2.8.2) ---
 # ==============================================================================
 
 # 1. Carga de datos
 df_full_historial = cargar_datos_historial()
-df_snapshot = cargar_datos_snapshot() # <-- NUEVA CARGA
+# --- CAMBIO v2.8.2: Carga el snapshot de Lote 1 ---
+df_snapshot = cargar_datos_snapshot() # <-- Ahora carga de 'snapshot_lote_1'
 
 # Definir estados finales
 ESTADOS_FINALES = ['cerrado', 'validacion ext']
@@ -1075,7 +1095,7 @@ else:
         df_unicos_base = pd.DataFrame(columns=df_full_historial.columns)
     # --- FIN DE LA LÓGICA (v2.8.1) ---
         
-    # 5b. Filtrar el SNAPSHOT por supervisor
+    # 5b. Filtrar el SNAPSHOT (Lote 1) por supervisor
     df_snapshot_filtrado = df_snapshot.copy()
     if not df_snapshot_filtrado.empty:
         if st.session_state.user_role == "supervisor":
@@ -1117,7 +1137,7 @@ if menu == "🏠 Principal":
     render_dashboard_page(
         title_prefix="Principal",
         df_page_data=df_unicos,
-        df_snapshot=df_snapshot_filtrado, 
+        df_snapshot=df_snapshot_filtrado, # <-- Pasa el df_snapshot_lote_1 filtrado
         df_full_historial=df_full_historial,
         df_unicos_para_buscar=df_supervisor_unicos_MASTER,
         role=st.session_state.user_role,
