@@ -8,7 +8,7 @@ backgroundColor="#f9f9f9"
 # Sidebar y contenedores en blanco
 secondaryBackgroundColor="#ffffff"
 
-# Texto en un gris cálido (casi marrón oscuro)
-textColor="#000000"
+# Texto en un azul oscuro para un contraste limpio y profesional
+textColor="#0a2a4a" # Este es un azul oscuro, casi marino
 
 font="sans serif"
