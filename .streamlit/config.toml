@@ -1,14 +1,7 @@
 [theme]
-# Un color burdeos o rojo oscuro, muy profesional
-primaryColor="#9a3e3e"
-
-# Fondo principal en un color "hueso" o beige muy claro
-backgroundColor="#D3D3D3"
-
-# Sidebar y contenedores en blanco
-secondaryBackgroundColor="#ffffff"
-
-# Texto en un azul oscuro para un contraste limpio y profesional
-textColor="#0a2a4a" # Este es un azul oscuro, casi marino
-
-font="sans serif"
+# Colores primarios y de fondo inspirados en la NUEVA imagen (con rojo)
+primaryColor="#e74c3c"  # Un rojo brillante/medio para elementos interactivos
+backgroundColor="#1e1e1e" # Fondo principal muy oscuro (casi negro)
+secondaryBackgroundColor="#2a2a2a" # Fondo ligeramente más claro para sidebar, contenedores
+textColor="#ffffff" # Texto principal blanco
+font="sans serif" # Fuente limpia
