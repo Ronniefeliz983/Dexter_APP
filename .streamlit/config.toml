@@ -1,3 +1,8 @@
 [theme]
-
+# Colores primarios y de fondo inspirados en tu solicitud
+primaryColor="#e74c3c"
+backgroundColor="#1e1e1e"
+secondaryBackgroundColor="#2a2a2a"
+textColor="#ffffff"
+font="sans serif"
 
