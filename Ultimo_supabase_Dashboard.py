@@ -25,36 +25,23 @@ st.set_page_config(page_title="Dashboard Trabajos S - v2.7.2", layout="wide")
 # --- CSS PARA MÓVILES ---
 st.markdown("""
 <style>
-    /* --- Estilo de Tarjetas (de la respuesta anterior) --- */
+    /* 1. Reduce el espacio HORIZONTAL entre las columnas (tus métricas) */
+    [data-testid="stHorizontalBlock"] > div {
+        gap: 0.5rem; /* El valor por defecto es 1rem. '0.5rem' es la mitad. */
+    }
 
-    /* Estilo para las métricas (cuadros de 10.5K, 510, etc.) */
+    /* 2. Reduce el espacio VERTICAL entre las filas */
+    [data-testid="stVerticalBlock"] > div {
+        gap: 0.5rem; /* El valor por defecto es 1rem. */
+    }
+
+    /* 3. (Opcional) Reduce el espacio interno de las tarjetas de métricas */
+    /* Descomenta esto si también quieres que las tarjetas sean más pequeñas */
+    /*
     [data-testid="stMetric"] {
-        background-color: #ffffff; /* Fondo blanco */
-        border: 1px solid #e0e0e0; /* Borde gris claro */
-        border-radius: 10px; /* Bordes redondeados */
-        padding: 20px; /* Espacio interior */
-        box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
+        padding: 15px; 
     }
-
-    /* Estilo para los contenedores (donde van los gráficos) */
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-    }
-    
-    [data-testid="stVerticalBlockBorderWrapper"] > div {
-        border: none;
-    }
-
-    /* --- ¡NUEVA REGLA PARA ENCABEZADOS DE TABLA EN NEGRITA! --- */
-
-    /* Apunta a las celdas del encabezado de la tabla (thead th) */
-    [data-testid="stDataFrame"] thead th {
-        font-weight: 700 !important; /* O puedes usar 'bold' */
-    }
+    */
 </style>
 """, unsafe_allow_html=True)
 # --- FIN DEL NUEVO CÓDIGO ---
@@ -1637,5 +1624,6 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" 
         )
+
 
 
