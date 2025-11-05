@@ -25,23 +25,50 @@ st.set_page_config(page_title="Dashboard Trabajos S - v2.7.2", layout="wide")
 # --- CSS PARA MÓVILES ---
 st.markdown("""
 <style>
-    /* 1. Reduce el espacio HORIZONTAL entre las columnas (tus métricas) */
-    [data-testid="stHorizontalBlock"] > div {
-        gap: 0.5rem; /* El valor por defecto es 1rem. '0.5rem' es la mitad. */
-    }
+    /* --- 1. Estilo de Tarjetas (Métricas y Contenedores) --- */
 
-    /* 2. Reduce el espacio VERTICAL entre las filas */
-    [data-testid="stVerticalBlock"] > div {
-        gap: 0.5rem; /* El valor por defecto es 1rem. */
-    }
-
-    /* 3. (Opcional) Reduce el espacio interno de las tarjetas de métricas */
-    /* Descomenta esto si también quieres que las tarjetas sean más pequeñas */
-    /*
+    /* Estilo para las métricas (tus cuadros de números) */
     [data-testid="stMetric"] {
-        padding: 15px; 
+        background-color: #ffffff; /* Fondo blanco */
+        border: 1px solid #e0e0e0; /* Borde gris claro */
+        border-radius: 10px; /* Bordes redondeados */
+        padding: 15px; /* Espacio interior (reducido para ser más compacto) */
+        box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
     }
-    */
+
+    /* Estilo para los contenedores (donde van los gráficos) */
+    /* ¡Recuerda usarlos con st.container(border=True)! */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 15px; /* Espacio interior (reducido) */
+        box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+    }
+    
+    /* Oculta el borde por defecto de streamlit ya que usamos uno nuestro */
+    [data-testid="stVerticalBlockBorderWrapper"] > div {
+        border: none;
+    }
+
+    /* --- 2. Encabezados de Tabla en Negrita --- */
+
+    /* Apunta a las celdas del encabezado de la tabla (thead th) */
+    [data-testid="stDataFrame"] thead th {
+        font-weight: 700 !important; /* '700' es 'bold' (negrita) */
+    }
+
+    /* --- 3. Layout más Ajustado (Menos Espacio) --- */
+
+    /* Reduce el espacio HORIZONTAL entre las columnas (métricas) */
+    [data-testid="stHorizontalBlock"] > div {
+        gap: 0.5rem; /* El valor por defecto es 1rem */
+    }
+
+    /* Reduce el espacio VERTICAL entre las filas */
+    [data-testid="stVerticalBlock"] > div {
+        gap: 0.5rem; /* El valor por defecto es 1rem */
+    }
 </style>
 """, unsafe_allow_html=True)
 # --- FIN DEL NUEVO CÓDIGO ---
@@ -1624,6 +1651,7 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" 
         )
+
 
 
 
