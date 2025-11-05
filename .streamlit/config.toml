@@ -1,6 +1,14 @@
 [theme]
-primaryColor="#e08070"
-backgroundColor="#f0f2f6"
+# Un color burdeos o rojo oscuro, muy profesional
+primaryColor="#9a3e3e"
+
+# Fondo principal en un color "hueso" o beige muy claro
+backgroundColor="#f9f9f9"
+
+# Sidebar y contenedores en blanco
 secondaryBackgroundColor="#ffffff"
-textColor="#333333"
+
+# Texto en un gris cálido (casi marrón oscuro)
+textColor="#000000"
+
 font="sans serif"
