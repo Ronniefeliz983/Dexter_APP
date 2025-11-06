@@ -508,7 +508,7 @@ def cargar_datos():
 # --- FIN DE LA LÓGICA DE CARGA ---
 
 
-# --- NUEVA FUNCIÓN DE CARGA v2.7.3 ---
+# --- NUEVA FUNCIÓN DE CARGA v2.7.4 (CORREGIDA) ---
 @st.cache_data(ttl=60)
 def cargar_datos_reabiertos():
     """Carga la tabla 'reabiertos' de Supabase."""
@@ -533,21 +533,21 @@ def cargar_datos_reabiertos():
         if 'supervisor' in df_sql.columns:
             df_sql['supervisor'] = df_sql['supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
         
-        # CORRECCIÓN: Normalizar la nueva columna también
-        if 'tarjeta_Supervisor' in df_sql.columns:
-            df_sql['tarjeta_Supervisor'] = df_sql['tarjeta_Supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+        # CORRECCIÓN: Normalizar la nueva columna también (en minúscula)
+        if 'tarjeta_supervisor' in df_sql.columns:
+            df_sql['tarjeta_supervisor'] = df_sql['tarjeta_supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
         else:
             # Si la columna AÚN no existe (por si el KUNAI script no ha corrido)
             # La creamos vacía para evitar que el script del dashboard falle.
-            df_sql['tarjeta_Supervisor'] = None
-
+            st.warning("Columna 'tarjeta_supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará hasta que se ejecute el script KUNAI v2.7.9.")
+            df_sql['tarjeta_supervisor'] = None
 
         return df_sql
     except Exception as e:
-        # Si el error es "column 'tarjeta_Supervisor' does not exist", creamos un df vacío
-        if "tarjeta_Supervisor" in str(e) and "does not exist" in str(e):
-             st.warning("La columna 'tarjeta_Supervisor' aún no existe en 'reabiertos'. Ejecuta el script KUNAI v2.7.8 para arreglarlo.")
-             return pd.DataFrame()
+        # Si el error es "column 'tarjeta_supervisor' does not exist", creamos un df vacío
+        if "tarjeta_supervisor" in str(e).lower() and "does not exist" in str(e).lower():
+             st.warning("Columna 'tarjeta_supervisor' aún no existe en 'reabiertos'. Ejecuta el script KUNAI v2.7.9 para arreglarlo.")
+             return pd.DataFrame() # Devuelve vacío si la columna no existe
         st.error(f"❌ Error al cargar datos desde 'reabiertos': {e}")
         return pd.DataFrame()
 # --- FIN DE LA NUEVA FUNCIÓN ---
@@ -1842,14 +1842,14 @@ elif menu == "🔄 Reabiertos":
         
         # ***** INICIO DE LA CORRECCIÓN v2.7.4 *****
         if st.session_state.user_role == "supervisor":
-            # Comparamos con 'tarjeta_Supervisor' (ID) en lugar de 'supervisor' (Nombre)
-            if 'tarjeta_Supervisor' in df_coincidencias_ROL.columns: 
+            # Comparamos con 'tarjeta_supervisor' (minúscula)
+            if 'tarjeta_supervisor' in df_coincidencias_ROL.columns: 
                 df_coincidencias_ROL = df_coincidencias_ROL[
-                    df_coincidencias_ROL['tarjeta_Supervisor'].astype(str) == str(st.session_state.supervisor_id)
+                    df_coincidencias_ROL['tarjeta_supervisor'].astype(str) == str(st.session_state.supervisor_id)
                 ]
             else:
                 # Si la columna no existiera, se vacía para evitar mostrar datos incorrectos
-                st.warning("Columna 'tarjeta_Supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará.")
+                st.warning("Columna 'tarjeta_supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará.")
                 df_coincidencias_ROL = df_coincidencias_ROL.iloc[0:0] 
         # ***** FIN DE LA CORRECCIÓN v2.7.4 *****
 
@@ -1917,4 +1917,3 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
