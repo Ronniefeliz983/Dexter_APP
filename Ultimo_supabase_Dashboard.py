@@ -76,58 +76,142 @@ st.markdown("""
 # --- FIN DEL CÓDIGO CSS ---
 
 
-# --------------------------
-# Sistema de Login
-# --------------------------
-def verificar_login():
-    """Maneja el sistema de inicio de sesión y roles de usuario."""
-    usuarios = {
-        "admin": {"password": "admin123", "role": "admin", "supervisor_id": None},
-        "gerencia": {"password": "gerencia123", "role": "gerencia", "supervisor_id": None},
-        "supervisor": {"password": "super123", "role": "supervisor_old", "supervisor_id": None},
-        "601378": {"password": "1234", "role": "supervisor", "supervisor_id": "601378"},
-        "601665": {"password": "1234", "role": "supervisor", "supervisor_id": "601665"},
-        "601799": {"password": "1234", "role": "supervisor", "supervisor_id": "601799"},
-        "61768": {"password": "1234", "role": "supervisor", "supervisor_id": "61768"},
-        "juan_perez": {"password": "1234", "role": "supervisor", "supervisor_id": "601378"},
-        "maria_gonzalez": {"password": "1234", "role": "supervisor", "supervisor_id": "601665"},
-    }
+# ==============================================================================
+# --- Conexión Supabase (Necesaria para Login y Datos) ---
+# ==============================================================================
 
+@st.cache_resource
+def get_database_engine():
+    """Crea una conexión a Supabase."""
+    DATABASE_URL = "" # Se poblará desde st.secrets
+    try:
+        DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
+    except Exception:
+        DATABASE_URL = os.environ.get("DATABASE_URL")
+
+    if not DATABASE_URL:
+        st.error("⚠️ No se encontró la 'DATABASE_URL'.")
+        st.stop()
+        return None
+
+    try:
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            connect_args={'options': '-csearch_path=public'}
+        )
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+    except Exception as e:
+        st.error(f"⚠️ Error conectando a Supabase: {e}")
+        st.stop()
+        return None
+
+# --------------------------
+# --- ¡NUEVO SISTEMA DE LOGIN BASADO EN DB! ---
+# --------------------------
+
+def consultar_usuario(username, password):
+    """
+    Consulta la nueva tabla 'usuarios_dashboard' para verificar el login.
+    Devuelve los datos del usuario si es exitoso, o None si falla.
+    """
+    engine = get_database_engine()
+    if engine is None:
+        st.error("Error de conexión con la base de datos.")
+        return None
+        
+    try:
+        with engine.connect() as conn:
+            # --- Seleccionamos las columnas necesarias ---
+            query = text("""
+                SELECT username, role, supervisor_id, nombre_supervisor 
+                FROM usuarios_dashboard 
+                WHERE username = :user AND password = :pass
+            """)
+            
+            result = conn.execute(query, {"user": username, "pass": password})
+            user_data = result.fetchone() # fetchone() obtiene la primera fila o None
+            
+            if user_data:
+                # Convertir el resultado (que es como una tupla) a un diccionario
+                return dict(user_data._mapping)
+            else:
+                return None
+                
+    except Exception as e:
+        st.error(f"Error al consultar el usuario: {e}")
+        return None
+
+def verificar_login():
+    """Maneja el sistema de inicio de sesión y roles de usuario (AHORA CON DB)."""
+    
     st.session_state.setdefault('logged_in', False)
     st.session_state.setdefault('username', None)
     st.session_state.setdefault('user_role', None)
     st.session_state.setdefault('supervisor_id', None)
+    st.session_state.setdefault('nombre_supervisor', None) # <-- Campo para el nombre
 
     if not st.session_state.logged_in:
         st.title("🔐 Login - Dashboard Trabajos Dexter")
         with st.form("login_form"):
-            usuario = st.text_input("👤 Usuario", placeholder="Ingresa tu usuario o ID supervisor")
-            password = st.text_input("🔑 Contraseña", type="password", placeholder="Ingresa tu contraseña")
+            usuario_input = st.text_input("👤 Usuario", placeholder="Ingresa tu usuario o ID supervisor")
+            password_input = st.text_input("🔑 Contraseña", type="password", placeholder="Ingresa tu contraseña")
             submitted = st.form_submit_button("🚀 Iniciar Sesión")
+            
             if submitted:
-                if usuario in usuarios and usuarios[usuario]["password"] == password:
+                # Consultar la base de datos
+                user_info = consultar_usuario(usuario_input, password_input)
+                
+                if user_info:
+                    # Si la consulta fue exitosa
                     st.session_state.logged_in = True
-                    st.session_state.username = usuario
-                    st.session_state.user_role = usuarios[usuario]["role"]
-                    st.session_state.supervisor_id = usuarios[usuario]["supervisor_id"]
+                    st.session_state.username = user_info.get('username')
+                    st.session_state.user_role = user_info.get('role')
+                    st.session_state.supervisor_id = user_info.get('supervisor_id')
+                    st.session_state.nombre_supervisor = user_info.get('nombre_supervisor') # <-- Guardamos el nombre
                     st.rerun()
                 else:
                     st.error("❌ Usuario o contraseña incorrectos")
         return False
     else:
-        role_display = {
-            "admin": "Administración",
-            "gerencia": "Gerencia",
-            "supervisor_old": "Supervisor General"
-        }.get(st.session_state.user_role, f"Supervisor {st.session_state.supervisor_id}")
-        st.sidebar.success(f"👤 **{role_display}**")
+        # El usuario ya está logueado
+        
+        # --- ¡INICIO DE LA NUEVA LÓGICA DE DISPLAY! ---
+        if st.session_state.nombre_supervisor:
+            # Si la DB tiene un nombre (ej. "Juan Perez"), se usa ese.
+            nombre_base = st.session_state.nombre_supervisor
+        else:
+            # Si no, se usa la lógica de roles anterior como fallback.
+            nombre_base = {
+                "admin": "Administración",
+                "gerencia": "Gerencia",
+                "supervisor_old": "Supervisor General"
+            }.get(st.session_state.user_role, "Usuario Desconocido")
 
+        # Añadir el ID de supervisor si existe
+        supervisor_id_str = st.session_state.get('supervisor_id')
+        
+        if supervisor_id_str:
+            nombre_a_mostrar = f"{nombre_base} / {supervisor_id_str}"
+        else:
+            nombre_a_mostrar = nombre_base
+        # --- FIN DE LA NUEVA LÓGICA DE DISPLAY ---
+        
+        # Mostrar el nombre formateado en el sidebar
+        st.sidebar.success(f"👤 **{nombre_a_mostrar}**")
 
         if st.sidebar.button("🚪 Cerrar Sesión"):
-            for key in ['logged_in', 'username', 'user_role', 'supervisor_id']:
+            # Limpiar todos los datos de sesión al salir
+            keys_to_clear = ['logged_in', 'username', 'user_role', 'supervisor_id', 'nombre_supervisor']
+            for key in keys_to_clear:
                 st.session_state[key] = None if key != 'logged_in' else False
             st.rerun()
         return True
+# --- FIN DEL NUEVO SISTEMA DE LOGIN ---
+
 
 if not verificar_login():
     st.stop()
@@ -316,39 +400,6 @@ def calcular_kpis(df, df_full_historial):
     }
 # --- End of KPI Calculation Function ---
 
-
-# ==============================================================================
-# --- Conexión Supabase y Mapeo de Columnas ---
-# ==============================================================================
-
-@st.cache_resource
-def get_database_engine():
-    """Crea una conexión a Supabase."""
-    DATABASE_URL = "" # Se poblará desde st.secrets
-    try:
-        DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
-    except Exception:
-        DATABASE_URL = os.environ.get("DATABASE_URL")
-
-    if not DATABASE_URL:
-        st.error("⚠️ No se encontró la 'DATABASE_URL'.")
-        st.stop()
-        return None
-
-    try:
-        engine = create_engine(
-            DATABASE_URL,
-            pool_pre_ping=True,
-            pool_recycle=1800,
-            connect_args={'options': '-csearch_path=public'}
-        )
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return engine
-    except Exception as e:
-        st.error(f"⚠️ Error conectando a Supabase: {e}")
-        st.stop()
-        return None
 
 def get_column_mappings():
     """Devuelve el mapeo de nombres SQL a nombres CSV (PascalCase)."""
