@@ -441,7 +441,8 @@ def cargar_datos():
                  df[col] = df[col].dt.tz_localize(None)
     # --- FIN CORRECCIÓN v2.7.2 ---
 
-    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime664_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
+    # --- CORRECCIÓN: 'is_datetime664_any_dtype' -> 'is_datetime64_any_dtype' ---
+    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
         mask_valid_oe = df['OE_Creacion'].notna()
         if mask_valid_oe.any():
             pyme_info = df.loc[mask_valid_oe, 'OE_Creacion'].apply(lambda x: pd.Series(calcular_pyme_y_vence(x), index=['PYME', 'Vence en']))
