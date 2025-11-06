@@ -441,10 +441,8 @@ def cargar_datos():
                  df[col] = df[col].dt.tz_localize(None)
     # --- FIN CORRECCIÓN v2.7.2 ---
 
-    # --- INICIO CORRECCIÓN AttributeError ---
-    # Se cambió is_datetime664_any_dtype a is_datetime64_any_dtype
+    # --- CORRECCIÓN: 'is_datetime664_any_dtype' -> 'is_datetime64_any_dtype' ---
     if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
-    # --- FIN CORRECCIÓN AttributeError ---
         mask_valid_oe = df['OE_Creacion'].notna()
         if mask_valid_oe.any():
             pyme_info = df.loc[mask_valid_oe, 'OE_Creacion'].apply(lambda x: pd.Series(calcular_pyme_y_vence(x), index=['PYME', 'Vence en']))
@@ -594,6 +592,51 @@ def to_excel(df: pd.DataFrame):
         st.error(f"Error al generar el archivo Excel: {e}")
         return None
 
+# --- ¡NUEVA FUNCIÓN DE ESTILO! ---
+def aplicar_estilo_resumen_tecnico(row):
+    """
+    Aplica color a la celda 'Total Manejado' según las reglas de negocio.
+    Se usa con df.style.apply(..., axis=1)
+    """
+    # Crear una serie de estilos vacía
+    styles = pd.Series('', index=row.index)
+    
+    # Ignorar la fila 'TOTAL'
+    # row.iloc[0] es la columna 'agrupar_por' ('Supervisor' o 'Asignado_A')
+    if row.iloc[0] == 'TOTAL':
+        return styles
+
+    try:
+        total = int(row['Total'])
+        total_manejado = int(row['Total Manejado'])
+    except (ValueError, TypeError):
+        return styles # No se pudo convertir, no aplicar estilo
+        
+    color_style = ''
+    
+    # Lógica: Más de 7 tickets en total
+    if total > 7:
+        if total_manejado < 7:
+            color_style = 'background-color: #ffcccc; color: #a60000;' # Rojo
+        elif total_manejado >= 7:
+            color_style = 'background-color: #ccffcc; color: #006400;' # Verde
+    
+    # Lógica: 7 o menos tickets en total (y más de 0)
+    elif total <= 7 and total > 0:
+        if total_manejado == total:
+            color_style = 'background-color: #ccffcc; color: #006400;' # Verde
+        elif total_manejado < total:
+            color_style = 'background-color: #ffcccc; color: #a60000;' # Rojo
+
+    # Aplicar el estilo solo a la columna 'Total Manejado'
+    if color_style:
+        styles['Total Manejado'] = color_style
+            
+    return styles
+# --- FIN DE LA NUEVA FUNCIÓN DE ESTILO ---
+
+
+# --- ¡FUNCIÓN crear_resumen_admin MODIFICADA! ---
 def crear_resumen_admin(df, agrupar_por='Supervisor'):
     cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']
     if df is None or df.empty:
@@ -617,9 +660,19 @@ def crear_resumen_admin(df, agrupar_por='Supervisor'):
     ).reset_index()
 
     resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote']
-    resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
-                                         round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+    
+    # --- INICIO DE LA NUEVA LÓGICA DE EFICIENCIA ---
+    # 1. Definir la condición (más de 7 tickets)
+    cond_mas_de_7 = resumen['Total'] > 7
+    
+    # 2. Definir el divisor: si es > 7, usa 7. Si no, usa el Total.
+    divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
+    
+    # 3. Calcular la eficiencia, asegurándonos de no dividir por cero
+    resumen['Eficiencia_Total_%'] = np.where(divisor > 0,
+                                         round(resumen['Total Manejado'] * 100 / divisor, 1),
                                          0.0)
+    # --- FIN DE LA NUEVA LÓGICA ---
     
     if not resumen.empty:
         total_row = pd.Series(name='Total')
@@ -634,6 +687,8 @@ def crear_resumen_admin(df, agrupar_por='Supervisor'):
         
         total_manejado_general = total_row['Total Manejado']
         total_general = total_row['Total']
+        
+        # --- IMPORTANTE: La fila 'TOTAL' usa la lógica original ---
         total_row['Eficiencia_Total_%'] = round(total_manejado_general * 100 / total_general, 1) if total_general > 0 else 0.0
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
@@ -751,7 +806,7 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 
 # ---
-# --- ¡INICIO DE LA CORRECCIÓN VISUAL! ---
+# --- ¡FUNCIÓN display_kpi_metrics CORREGIDA (Soluciona el error visual) ! ---
 # ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     """
@@ -882,9 +937,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
-# ---
-# --- ¡FIN DE LA CORRECCIÓN VISUAL! ---
-# ---
+
 
 def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix):
     """
@@ -1062,7 +1115,14 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
                 st.markdown("---")
                 st.markdown("#### 📋 Resumen Detallado por Supervisor")
-                st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
+                
+                # --- MODIFICACIÓN: Aplicar estilo ---
+                st.dataframe(
+                    resumen_admin.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+                
                 excel_data_resumen = to_excel(resumen_admin)
                 if excel_data_resumen:
                     st.download_button(
@@ -1076,6 +1136,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             except Exception as e:
                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
                 if not resumen_admin.empty:
+                    # Fallback sin estilo si hay error
                     st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
 
     # --- Vista Gerencia ---
@@ -1084,7 +1145,13 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor')
-        st.dataframe(resumen_sup, use_container_width=True, hide_index=True)
+        
+        # --- MODIFICACIÓN: Aplicar estilo ---
+        st.dataframe(
+            resumen_sup.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+            use_container_width=True, 
+            hide_index=True
+        )
 
         st.markdown("---")
         st.subheader("👨‍🔧 Resumen por Técnico")
@@ -1092,7 +1159,13 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A')
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
-            st.dataframe(resumen_tec, use_container_width=True, hide_index=True)
+            
+            # --- MODIFICACIÓN: Aplicar estilo ---
+            st.dataframe(
+                resumen_tec.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                use_container_width=True, 
+                hide_index=True
+            )
         else:
             st.info("No hay datos de 'Asignado_A' para mostrar resumen.")
         
@@ -1117,7 +1190,14 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por)
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
-                    st.dataframe(resumen, use_container_width=True, hide_index=True)
+                    
+                    # --- MODIFICACIÓN: Aplicar estilo ---
+                    st.dataframe(
+                        resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+                    
                     excel_data_resumen_sup = to_excel(resumen)
                     if excel_data_resumen_sup:
                         st.download_button(
@@ -1238,7 +1318,14 @@ if menu == "🏠 Principal":
             resumen = crear_resumen_admin(df_unicos, agrupar_por=agrupar_por)
             if not resumen.empty:
                 resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
-                st.dataframe(resumen, use_container_width=True, hide_index=True)
+                
+                # --- MODIFICACIÓN: Aplicar estilo ---
+                st.dataframe(
+                    resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+                
                 excel_data_resumen_sup = to_excel(resumen)
                 if excel_data_resumen_sup:
                     st.download_button(
