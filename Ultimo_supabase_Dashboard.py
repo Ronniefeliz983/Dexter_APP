@@ -22,7 +22,7 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.2", layout="wide")
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.3", layout="wide") # <-- Versión actualizada
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
@@ -370,6 +370,53 @@ def calcular_kpis(df, df_full_historial):
     }
 # --- End of KPI Calculation Function ---
 
+# --- NUEVA FUNCIÓN DE ANÁLISIS v2.7.3 ---
+@st.cache_data(ttl=60)
+def analizar_reabiertos(_df_historial, _df_reabiertos):
+    """
+    Compara reabiertos['caso'] con historial['OrdenExterna'] que estén 'activo' o 'iniciado'.
+    """
+    if _df_historial is None or _df_historial.empty or _df_reabiertos is None or _df_reabiertos.empty:
+        return pd.DataFrame()
+
+    try:
+        # 1. Obtener el último estado de TODOS los tickets del historial
+        df_historial_unicos = obtener_datos_unicos(_df_historial)
+        if df_historial_unicos.empty:
+            return pd.DataFrame()
+
+        # 2. Filtrar el historial por 'activo' e 'iniciado'
+        estados_activos = ['activo', 'iniciado']
+        df_activos_iniciados = df_historial_unicos[
+            df_historial_unicos['Estado'].astype(str).str.lower().isin(estados_activos)
+        ]
+        
+        if df_activos_iniciados.empty:
+            return pd.DataFrame() # No hay tickets activos, por lo tanto no hay coincidencias
+
+        # 3. Obtener el set de IDs para una búsqueda rápida
+        activos_iniciados_ids = set(df_activos_iniciados['OrdenExterna'])
+        
+        # 4. Encontrar las coincidencias en la tabla 'reabiertos'
+        #    Comparamos la columna 'caso' de reabiertos con el set de 'OrdenExterna'
+        df_coincidencias = _df_reabiertos[
+            _df_reabiertos['caso'].isin(activos_iniciados_ids)
+        ].copy()
+
+        if df_coincidencias.empty:
+            return pd.DataFrame()
+
+        # 5. Ordenar por 'fecha' (la función de carga ya la convirtió a datetime)
+        if 'fecha' in df_coincidencias.columns and pd.api.types.is_datetime64_any_dtype(df_coincidencias['fecha']):
+            df_coincidencias = df_coincidencias.sort_values('fecha', ascending=False)
+        
+        return df_coincidencias
+    except Exception as e:
+        st.error(f"Error en analizar_reabiertos: {e}")
+        st.error(traceback.format_exc())
+        return pd.DataFrame()
+# --- FIN DE LA NUEVA FUNCIÓN ---
+
 
 # --- Mapeo y Carga de Datos (Sin Cambios) ---
 def get_column_mappings():
@@ -431,11 +478,11 @@ def cargar_datos():
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             try:
                 if df[col].dt.tz is not None:
-                     df[col] = df[col].dt.tz_convert('Etc/GMT+4').dt.tz_localize(None)
+                        df[col] = df[col].dt.tz_convert('Etc/GMT+4').dt.tz_localize(None)
                 else:
-                     df[col] = df[col].dt.tz_localize('Etc/GMT+4', ambiguous='infer').dt.tz_localize(None)
+                        df[col] = df[col].dt.tz_localize('Etc/GMT+4', ambiguous='infer').dt.tz_localize(None)
             except Exception:
-                 df[col] = df[col].dt.tz_localize(None)
+                df[col] = df[col].dt.tz_localize(None)
     if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
         mask_valid_oe = df['OE_Creacion'].notna()
         if mask_valid_oe.any():
@@ -460,10 +507,43 @@ def cargar_datos():
 # --- FIN DE LA LÓGICA DE CARGA ---
 
 
+# --- NUEVA FUNCIÓN DE CARGA v2.7.3 ---
+@st.cache_data(ttl=60)
+def cargar_datos_reabiertos():
+    """Carga la tabla 'reabiertos' de Supabase."""
+    engine = get_database_engine()
+    if engine is None:
+        st.error("No hay conexión a la base de datos.")
+        return pd.DataFrame()
+    try:
+        query = text("SELECT * FROM reabiertos")
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        
+        if df_sql.empty:
+            st.warning("La tabla 'reabiertos' está vacía.")
+            return pd.DataFrame()
+        
+        # Procesar columnas clave para filtros y orden
+        if 'fecha' in df_sql.columns:
+            df_sql['fecha'] = pd.to_datetime(df_sql['fecha'], errors='coerce', dayfirst=True, format='mixed')
+        
+        if 'supervisor' in df_sql.columns:
+            df_sql['supervisor'] = df_sql['supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+
+        return df_sql
+    except Exception as e:
+        st.error(f"❌ Error al cargar datos desde 'reabiertos': {e}")
+        return pd.DataFrame()
+# --- FIN DE LA NUEVA FUNCIÓN ---
+
+
 # ==============================================================================
 # --- LÓGICA PRINCIPAL (v2.7.1) ---
 # ==============================================================================
 df_full_historial = cargar_datos()
+df_reabiertos_full = cargar_datos_reabiertos() # <-- NUEVA LÍNEA v2.7.3
+
 if df_full_historial is None or df_full_historial.empty:
     st.error("No se pudieron cargar datos. Verifica la conexión a Supabase y que la tabla 'historial_cambios' no esté vacía.")
     st.stop()
@@ -514,10 +594,14 @@ def formatear_para_display(df_input):
     if df_input is None or df_input.empty:
         return df_input
     df_display = df_input.copy()
+    
+    # --- INICIO CAMBIO v2.7.3: Añadir 'fecha' ---
     columnas_fechas_a_procesar = [
         'Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Vence en', 
-        'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento'
+        'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento', 'fecha'
     ]
+    # --- FIN CAMBIO v2.7.3 ---
+    
     columnas_fechas_presentes = df_display.columns.intersection(columnas_fechas_a_procesar)
     for col in columnas_fechas_presentes:
         if pd.api.types.is_datetime64_any_dtype(df_display[col]) and not df_display[col].isna().all():
@@ -527,6 +611,7 @@ def formatear_para_display(df_input):
                 df_display[col] = df_display[col].astype(str).replace('NaT', None)
         else:
             df_display[col] = df_display[col].astype(str).replace('nan', None).replace('NaT', None).replace('<NA>', None).replace('None',None)
+    
     for col in df_display.columns:
         if col not in columnas_fechas_presentes:
             try:
@@ -601,12 +686,12 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
         cond_mas_de_7 = resumen['Total'] > 7
         divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
         resumen['Eficiencia_Total_%'] = np.where(divisor > 0,
-                                             round(resumen['Total Manejado'] * 100 / divisor, 1),
-                                             0.0)
+                                            round(resumen['Total Manejado'] * 100 / divisor, 1),
+                                            0.0)
     else:
         resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
-                                             round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
-                                             0.0)
+                                            round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+                                            0.0)
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         total_row[agrupar_por] = 'TOTAL'
@@ -662,7 +747,7 @@ def filtrar_dataframe_con_historial(df_completo_historial, df_unicos_para_buscar
     if supervisor_filter and 'Supervisor' in df_historial.columns:
         df_historial = df_historial[df_historial['Supervisor'].astype(str) == str(supervisor_filter)]
     ts_col_valid_hist = ('Timestamp_Procesado' in df_historial.columns and
-                         pd.api.types.is_datetime64_any_dtype(df_historial['Timestamp_Procesado']))
+                        pd.api.types.is_datetime64_any_dtype(df_historial['Timestamp_Procesado']))
     if ts_col_valid_hist:
         df_historial = df_historial.sort_values(['OrdenExterna', 'Timestamp_Procesado'], ascending=[True, False], na_position='last')
     elif 'OrdenExterna' in df_historial.columns:
@@ -928,7 +1013,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         )
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                                   xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                                                xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
                         st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
                     else:
                         st.info("No hay PYMEs vencidas para mostrar.")
@@ -1232,7 +1317,7 @@ def render_admin_crud_page():
                 
                 if submitted_delete:
                     if user_to_edit == st.session_state.username:
-                         st.error("No puedes eliminar al usuario con el que estás logueado.")
+                            st.error("No puedes eliminar al usuario con el que estás logueado.")
                     else:
                         st.session_state[f'confirm_delete_{user_to_edit}'] = True
             
@@ -1264,7 +1349,7 @@ df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
 st.sidebar.title("📌 Menú")
 
 # --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
-menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento"]
+menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"] # <-- NUEVO v2.7.3
 
 # 1. Añadir "Tracking Ticket" para todos EXCEPTO para 'admin'
 if st.session_state.user_role != "admin":
@@ -1501,7 +1586,7 @@ elif menu == "🔍 Tracking Ticket":
             st.success(f"✅ {num_unicos} ticket(s) único(s) encontrado(s).")
             for orden_externa in df_track['OrdenExterna'].unique():
                 ts_col_valid_track = ('Timestamp_Procesado' in df_track.columns and
-                                      pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
+                                        pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
                 if ts_col_valid_track:
                     historial_ticket = df_track[df_track['OrdenExterna'] == orden_externa].sort_values('Timestamp_Procesado', ascending=False, na_position='last')
                 else:
@@ -1612,10 +1697,10 @@ elif menu == "🔍 Tracking Ticket":
             ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
             tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
         elif st.session_state.user_role == "admin" and supervisor_sel == "Todos":
-             tickets_recientes_base = df_full_historial.copy()
+                tickets_recientes_base = df_full_historial.copy()
         elif not df_supervisor_unicos_MASTER.empty:
-             ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
-             tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
+                ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
+                tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
         tickets_recientes = pd.DataFrame()
         if not tickets_recientes_base.empty and 'Timestamp_Procesado' in tickets_recientes_base.columns and pd.api.types.is_datetime64_any_dtype(tickets_recientes_base['Timestamp_Procesado']):
             tickets_recientes = tickets_recientes_base.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
@@ -1712,6 +1797,60 @@ elif menu == "📈 Rendimiento":
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin
         )
+
+# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.3 ---
+elif menu == "🔄 Reabiertos":
+    st.title(f"🔄 Análisis de Reabiertos - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("""
+    Esta página compara la tabla `reabiertos` (columna `caso`) contra el historial de `historial_cambios` (columna `OrdenExterna`).
+    
+    Muestra **solo** los casos de 'reabiertos' que actualmente se encuentran en estado **'activo'** o **'iniciado'** en KUNAI.
+    Los resultados se ordenan por la fecha más reciente del reporte de 'reabiertos'.
+    """)
+    
+    # Los datos df_full_historial y df_reabiertos_full ya están cargados al inicio.
+    if df_full_historial is None or df_full_historial.empty or df_reabiertos_full is None or df_reabiertos_full.empty:
+        st.warning("No se pudieron cargar los datos de 'historial_cambios' o 'reabiertos' para el análisis.")
+    else:
+        # 1. Realizar el análisis de cruce
+        df_coincidencias = analizar_reabiertos(df_full_historial, df_reabiertos_full)
+        
+        # 2. Aplicar filtros de supervisor basados en el rol
+        df_filtrada_coincidencias = df_coincidencias.copy()
+        
+        if st.session_state.user_role == "supervisor":
+            if 'supervisor' in df_filtrada_coincidencias.columns:
+                df_filtrada_coincidencias = df_filtrada_coincidencias[
+                    df_filtrada_coincidencias['supervisor'].astype(str) == str(st.session_state.supervisor_id)
+                ]
+        elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
+            if 'supervisor' in df_filtrada_coincidencias.columns:
+                    df_filtrada_coincidencias = df_filtrada_coincidencias[
+                    df_filtrada_coincidencias['supervisor'].astype(str) == str(supervisor_sel)
+                ]
+        
+        st.markdown("---")
+        
+        if df_filtrada_coincidencias.empty:
+            st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI (para el supervisor: {supervisor_sel}).")
+        else:
+            st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_coincidencias))
+            
+            # 3. Formatear para mostrar
+            # Usamos la función global formatear_para_display (que ya modificamos para incluir 'fecha')
+            df_display = formatear_para_display(df_filtrada_coincidencias)
+            
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            
+            # 4. Botón de descarga
+            excel_data = to_excel(df_filtrada_coincidencias) # Reutilizamos la función de Excel
+            if excel_data:
+                st.download_button(
+                    label="📥 Descargar Coincidencias (Excel)",
+                    data=excel_data,
+                    file_name=f"reabiertos_activos_{supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
 
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
