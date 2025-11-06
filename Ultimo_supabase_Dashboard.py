@@ -1015,17 +1015,25 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
         resumen_hora = df_grafico.groupby('Fecha_Hora').apply(agg_kpis_por_hora).reset_index()
 
         # 3. Asegurar el rango completo de horas (para mostrar ceros)
+        
+        # --- INICIO DE LA CORRECCIÓN AttributeError ---
         if dt_inicio is None or dt_fin is None:
-            # Fallback si las fechas no se pasaron (aunque deberían)
-            dt_inicio = df_grafico['Fecha_Hora'].min()
-            dt_fin = df_grafico['Fecha_Hora'].max()
+            # Fallback (devuelve Timestamps de Pandas, que SÍ tienen .floor())
+            dt_inicio_ts = df_grafico['Fecha_Hora'].min()
+            dt_fin_ts = df_grafico['Fecha_Hora'].max()
+        else:
+            # Vienen de los selectores (son datetimes), hay que convertirlos
+            dt_inicio_ts = pd.Timestamp(dt_inicio)
+            dt_fin_ts = pd.Timestamp(dt_fin)
 
-        if pd.isna(dt_inicio) or pd.isna(dt_fin):
+        if pd.isna(dt_inicio_ts) or pd.isna(dt_fin_ts):
             st.info("No hay datos en el rango seleccionado para mostrar la tendencia.")
             return
 
         # Crear un rango completo de horas desde el inicio hasta el fin de la selección
-        all_hours_range = pd.date_range(start=dt_inicio.floor('H'), end=dt_fin.floor('H'), freq='H')
+        all_hours_range = pd.date_range(start=dt_inicio_ts.floor('H'), end=dt_fin_ts.floor('H'), freq='H')
+        # --- FIN DE LA CORRECCIÓN AttributeError ---
+        
         df_horas_completas = pd.DataFrame({'Fecha_Hora': all_hours_range})
 
         # Fusionar con los datos agregados
@@ -1049,10 +1057,13 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
             text='Manejados' # <-- Mostrar el conteo en el gráfico
         )
         
+        # Ocultar el 0 para que no se vea tan cargado
         fig_tendencia.update_traces(
             texttemplate='%{text}', 
             textposition='top center'
         )
+        fig_tendencia.update_traces(text = [val if val > 0 else '' for val in resumen_hora_completo['Manejados']])
+
         fig_tendencia.update_layout(
             xaxis_title="Fecha y Hora",
             yaxis_title="Tickets Manejados (conteo)",
@@ -1871,6 +1882,6 @@ elif menu == "📈 Rendimiento":
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
             page_key="rendimiento",
-            dt_inicio=dt_inicio,
-            dt_fin=dt_fin
+            dt_inicio=dt_inicio, # <-- Se pasa aquí
+            dt_fin=dt_fin       # <-- Se pasa aquí
         )
