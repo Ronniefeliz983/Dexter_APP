@@ -6,3 +6,5 @@ plotly
 SQLAlchemy
 psycopg2-binary
 xlsxwriter
+bcrypt
+
