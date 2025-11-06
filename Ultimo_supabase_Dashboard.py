@@ -441,8 +441,10 @@ def cargar_datos():
                  df[col] = df[col].dt.tz_localize(None)
     # --- FIN CORRECCIÓN v2.7.2 ---
 
-    # --- CORRECCIÓN: 'is_datetime664_any_dtype' -> 'is_datetime64_any_dtype' ---
+    # --- INICIO CORRECCIÓN AttributeError ---
+    # Se cambió is_datetime664_any_dtype a is_datetime64_any_dtype
     if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
+    # --- FIN CORRECCIÓN AttributeError ---
         mask_valid_oe = df['OE_Creacion'].notna()
         if mask_valid_oe.any():
             pyme_info = df.loc[mask_valid_oe, 'OE_Creacion'].apply(lambda x: pd.Series(calcular_pyme_y_vence(x), index=['PYME', 'Vence en']))
@@ -749,7 +751,7 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 
 # ---
-# --- ¡FUNCIÓN MEJORADA Y CORREGIDA! (Soluciona el TypeError y el error visual) ---
+# --- ¡INICIO DE LA CORRECCIÓN VISUAL! ---
 # ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     """
@@ -761,52 +763,48 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
         """Función interna para manejar la lógica de 'Críticos'."""
         value_to_display = kpis.get(key, 0)
-        if not isinstance(value_to_display, (int, float)): value_to_display = 0
-
-        # --- INICIO DE LA MODIFICACIÓN CLAVE ---
+        if not isinstance(value_to_display, (int, float)): 
+            value_to_display = 0
+            
         # Si esta es la métrica crítica Y tiene un valor positivo...
         if key == critical_metric_key and value_to_display > 0:
+            # Usar HTML sin el st.container para evitar conflictos
+            # Se aplica el estilo de la tarjeta (CSS) directamente aquí
+            col.markdown(f"""
+            <div style="
+                background-color: #ffffff;
+                border: 1px solid #e0e0e0;
+                border-radius: 10px;
+                padding: 15px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+                min-height: 104px;
+            ">
+                <div style="font-size: 0.875rem; margin-bottom: 8px; color: #31333F;">
+                    {label}
+                </div>
+                <div style="
+                    font-size: 1.875rem; 
+                    font-weight: 600; 
+                    line-height: 1.2;
+                    color: #31333F;
+                ">
+                    <span style="margin-right: 8px; vertical-align: middle;">{value_to_display}</span>
+                    <span style="
+                        font-size: 0.75rem; 
+                        font-weight: 500;
+                        color: #d32f2f;
+                        background-color: #ffebee;
+                        padding: 2px 6px;
+                        border-radius: 4px;
+                        display: inline-block; 
+                        vertical-align: middle;
+                    ">↑ {delta_text}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # 1. NO LLAMAMOS A col.metric()
-            # 2. En su lugar, usamos un 'st.container' para que tome el estilo CSS
-            with col: 
-                with st.container(border=True): # Esto crea la tarjeta blanca
-                    
-                    # 3. Usamos st.markdown para RENDERIZAR el HTML
-                    st.markdown(f"""
-                    <div style="position: relative;"> 
-                        <div style="
-                            font-family: 'sans serif'; 
-                            color: #31333F; /* Color de texto de tu tema */
-                            padding: 2px;
-                        ">
-                            <div style="font-size: 0.875rem; margin-bottom: 8px;">{label}</div>
-                            
-                            <div style="
-                                font-size: 1.875rem; 
-                                font-weight: 600; 
-                                line-height: 1.2; /* Ajuste para alinear mejor */
-                            ">
-                                <span style="margin-right: 8px; vertical-align: middle;">{value_to_display}</span>
-                                
-                                <span style="
-                                    font-size: 0.75rem; 
-                                    font-weight: 500;
-                                    color: #d32f2f; /* Color de texto rojo */
-                                    background-color: #ffebee; /* Fondo rojo claro */
-                                    padding: 2px 6px;
-                                    border-radius: 4px;
-                                    display: inline-block; 
-                                    vertical-align: middle; /* Centra verticalmente con el número */
-                                ">↑ {delta_text}</span>
-                            </div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True) # <-- El parámetro mágico
-        # --- FIN DE LA MODIFICACIÓN CLAVE ---
-
         # Si es la métrica crítica pero vale 0, muéstrala normal
-        elif key == critical_metric_key and value_to_display <= 0 :
+        elif key == critical_metric_key and value_to_display <= 0:
             col.metric(label, value_to_display)
             
         # Para todas las demás métricas, muéstralas normal
@@ -819,7 +817,6 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         
         if st.session_state.user_role == "admin":
             # Para el Admin
-            # (Se eliminó el argumento de palabra clave 'critical_metric_key=' que causaba el TypeError)
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
                                  delta_text=critical_delta_text)
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
@@ -885,7 +882,9 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
-
+# ---
+# --- ¡FIN DE LA CORRECCIÓN VISUAL! ---
+# ---
 
 def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix):
     """
