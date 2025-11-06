@@ -22,7 +22,7 @@ import plotly.graph_objects as go
 # --- TÍTULO ACTUALIZADO ---
 st.set_page_config(page_title="Dashboard Trabajos S - v2.7.2", layout="wide")
 
-# --- CSS PARA MÓVILES ---
+# --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
 <style>
     /* --- 1. Estilo de Tarjetas (Métricas y Contenedores) --- */
@@ -34,6 +34,7 @@ st.markdown("""
         border-radius: 10px; /* Bordes redondeados */
         padding: 15px; /* Espacio interior (reducido para ser más compacto) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
 
     /* Estilo para los contenedores (donde van los gráficos) */
@@ -44,8 +45,7 @@ st.markdown("""
         border-radius: 10px;
         padding: 15px; /* Espacio interior (reducido) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-        /* --- AÑADIDO PARA ALINEAR LA TARJETA MANUAL --- */
-        min-height: 104px; 
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     
     /* Oculta el borde por defecto de streamlit ya que usamos uno nuestro */
@@ -73,7 +73,7 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-# --- FIN DEL NUEVO CÓDIGO ---
+# --- FIN DEL CÓDIGO CSS ---
 
 
 # --------------------------
@@ -324,7 +324,7 @@ def calcular_kpis(df, df_full_historial):
 @st.cache_resource
 def get_database_engine():
     """Crea una conexión a Supabase."""
-    DATABASE_URL = ""
+    DATABASE_URL = "" # Se poblará desde st.secrets
     try:
         DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
     except Exception:
@@ -748,10 +748,14 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 
 # ---
-# --- ¡FUNCIÓN MODIFICADA PARA MOVER "CRÍTICOS" AL LADO DEL NÚMERO! ---
+# --- ¡FUNCIÓN MEJORADA Y CORREGIDA! ---
 # ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
-    """Muestra la cuadrícula de KPIs."""
+    """
+    Muestra la cuadrícula de KPIs.
+    Si se pasa un 'critical_metric_key', esa métrica usará el HTML personalizado
+    para mostrar el delta al lado del número.
+    """
     
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
         value_to_display = kpis.get(key, 0)
@@ -761,39 +765,40 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         # Si esta es la métrica crítica Y tiene un valor positivo...
         if key == critical_metric_key and value_to_display > 0:
             # Usamos el contenedor para que tome el estilo de "tarjeta" del CSS
-            # (Esto es lo que llamas "canva")
-            with st.container(border=True):
-                # La altura mínima (104px) se define en el CSS global
-                st.markdown(f"""
-                <div style="position: relative;"> 
-                    <div style="
-                        font-family: 'sans serif'; 
-                        color: #31333F; /* Color de texto de tu tema */
-                        padding: 2px;
-                    ">
-                        <div style="font-size: 0.875rem; margin-bottom: 8px;">{label}</div>
-                        
+            # (Esta es la solución del "canva" con HTML)
+            with col: # APLICAR AL CONTENEDOR DE COLUMNA
+                with st.container(border=True):
+                    # La altura mínima (104px) se define en el CSS global
+                    st.markdown(f"""
+                    <div style="position: relative;"> 
                         <div style="
-                            font-size: 1.875rem; 
-                            font-weight: 600; 
-                            line-height: 1.2; /* Ajuste para alinear mejor */
+                            font-family: 'sans serif'; 
+                            color: #31333F; /* Color de texto de tu tema */
+                            padding: 2px;
                         ">
-                            <span style="margin-right: 8px; vertical-align: middle;">{value_to_display}</span>
+                            <div style="font-size: 0.875rem; margin-bottom: 8px;">{label}</div>
                             
-                            <span style="
-                                font-size: 0.75rem; 
-                                font-weight: 500;
-                                color: #d32f2f; /* Color de texto rojo */
-                                background-color: #ffebee; /* Fondo rojo claro */
-                                padding: 2px 6px;
-                                border-radius: 4px;
-                                display: inline-block; 
-                                vertical-align: middle; /* Centra verticalmente con el número */
-                            ">↑ {delta_text}</span>
+                            <div style="
+                                font-size: 1.875rem; 
+                                font-weight: 600; 
+                                line-height: 1.2; /* Ajuste para alinear mejor */
+                            ">
+                                <span style="margin-right: 8px; vertical-align: middle;">{value_to_display}</span>
+                                
+                                <span style="
+                                    font-size: 0.75rem; 
+                                    font-weight: 500;
+                                    color: #d32f2f; /* Color de texto rojo */
+                                    background-color: #ffebee; /* Fondo rojo claro */
+                                    padding: 2px 6px;
+                                    border-radius: 4px;
+                                    display: inline-block; 
+                                    vertical-align: middle; /* Centra verticalmente con el número */
+                                ">↑ {delta_text}</span>
+                            </div>
                         </div>
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
         # --- FIN DE LA MODIFICACIÓN ---
 
         # Si es la métrica crítica pero vale 0, muéstrala normal
@@ -828,8 +833,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col9, "📅 Citados", 'Citados')
             metric_with_critical(col10, "🔄 Rebote", 'Rebote')
         else: 
-            # Para Supervisores/Gerencia, "Pendientes" es la que es crítica
-            # (según tu código en la página principal)
+            # Para Supervisores/Gerencia
             
             # ¡AQUÍ APLICAMOS LA LÓGICA ESPECIAL!
             # La métrica "Total (Nuevos Hoy)"
@@ -990,9 +994,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
     # --- Vista Admin ---
     if role == "admin":
-        # (El código de Admin para las métricas de resumen ya no está aquí, 
-        # se maneja en display_kpi_metrics)
-        
         # Muestra la cuadrícula de KPIs
         display_kpi_metrics(kpis, page_key, critical_metric_key)
 
@@ -1225,7 +1226,8 @@ if menu == "🏠 Principal":
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
             page_key="principal",
-            critical_metric_key='Pendientes' # Para Gerencia/Admin, 'Pendientes' es crítico
+            # CORRECCIÓN: Pasa la métrica crítica correcta
+            critical_metric_key='Pendientes' 
         )
     else: # Vista Supervisor/Supervisor_Old
         kpis_supervisor = calcular_kpis(df_unicos, df_full_historial)
