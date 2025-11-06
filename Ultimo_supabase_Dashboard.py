@@ -22,7 +22,6 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-# Versión actualizada para reflejar los cambios de Reabiertos
 st.set_page_config(page_title="Dashboard Trabajos S - v2.7.4", layout="wide") 
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
@@ -533,12 +532,22 @@ def cargar_datos_reabiertos():
         # Normalizamos las columnas de supervisor para los filtros
         if 'supervisor' in df_sql.columns:
             df_sql['supervisor'] = df_sql['supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+        
+        # CORRECCIÓN: Normalizar la nueva columna también
         if 'tarjeta_Supervisor' in df_sql.columns:
             df_sql['tarjeta_Supervisor'] = df_sql['tarjeta_Supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+        else:
+            # Si la columna AÚN no existe (por si el KUNAI script no ha corrido)
+            # La creamos vacía para evitar que el script del dashboard falle.
+            df_sql['tarjeta_Supervisor'] = None
 
 
         return df_sql
     except Exception as e:
+        # Si el error es "column 'tarjeta_Supervisor' does not exist", creamos un df vacío
+        if "tarjeta_Supervisor" in str(e) and "does not exist" in str(e):
+             st.warning("La columna 'tarjeta_Supervisor' aún no existe en 'reabiertos'. Ejecuta el script KUNAI v2.7.8 para arreglarlo.")
+             return pd.DataFrame()
         st.error(f"❌ Error al cargar datos desde 'reabiertos': {e}")
         return pd.DataFrame()
 # --- FIN DE LA NUEVA FUNCIÓN ---
