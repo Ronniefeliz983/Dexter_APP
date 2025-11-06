@@ -584,7 +584,11 @@ def to_excel(df: pd.DataFrame):
     output = BytesIO()
     try:
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # --- MODIFICACIÓN: Aplicar formato de 1 decimal ANTES de exportar ---
             df_formateada = formatear_para_display(df.copy())
+            if 'Eficiencia_Total_%' in df_formateada.columns:
+                df_formateada['Eficiencia_Total_%'] = pd.to_numeric(df_formateada['Eficiencia_Total_%'], errors='coerce').round(1)
+            
             df_formateada.to_excel(writer, index=False, sheet_name='Datos')
         processed_data = output.getvalue()
         return processed_data
@@ -1052,7 +1056,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
         
-        # --- MODIFICACIÓN: Lógica de Supervisor (logica_tecnico=False) ---
+        # --- Lógica de Supervisor (logica_tecnico=False) ---
         resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False)
 
         if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
@@ -1124,8 +1128,12 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 st.markdown("---")
                 st.markdown("#### 📋 Resumen Detallado por Supervisor")
                 
-                # --- MODIFICACIÓN: Sin estilo para Supervisor ---
-                st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
+                # --- MODIFICACIÓN: Aplicar redondeo ---
+                st.dataframe(
+                    resumen_admin.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
+                    use_container_width=True, 
+                    hide_index=True
+                )
                 
                 excel_data_resumen = to_excel(resumen_admin)
                 if excel_data_resumen:
@@ -1148,23 +1156,27 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         
-        # --- MODIFICACIÓN: Lógica de Supervisor (logica_tecnico=False) ---
+        # --- Lógica de Supervisor (logica_tecnico=False) ---
         resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False)
-        # --- MODIFICACIÓN: Sin estilo para Supervisor ---
-        st.dataframe(resumen_sup, use_container_width=True, hide_index=True)
+        # --- MODIFICACIÓN: Aplicar redondeo ---
+        st.dataframe(
+            resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
+            use_container_width=True, 
+            hide_index=True
+        )
 
         st.markdown("---")
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
             
-            # --- MODIFICACIÓN: Lógica de Técnico (logica_tecnico=True) ---
+            # --- Lógica de Técnico (logica_tecnico=True) ---
             resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A', logica_tecnico=True)
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
             
-            # --- MODIFICACIÓN: Con estilo para Técnico ---
+            # --- MODIFICACIÓN: Aplicar estilo y redondeo ---
             st.dataframe(
-                resumen_tec.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                resumen_tec.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
                 use_container_width=True, 
                 hide_index=True
             )
@@ -1185,7 +1197,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
         titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
         
-        # --- MODIFICACIÓN: Determinar qué lógica usar ---
+        # --- Determinar qué lógica usar ---
         es_logica_tecnico = (agrupar_por == 'Asignado_A')
 
         if page_key == "principal" or page_key != "principal": # Lógica unificada
@@ -1193,21 +1205,26 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
                 
-                # --- MODIFICACIÓN: Pasar el flag de lógica ---
+                # --- Pasar el flag de lógica ---
                 resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico)
                 
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                     
-                    # --- MODIFICACIÓN: Aplicar estilo SÓLO si es técnico ---
+                    # --- Aplicar estilo SÓLO si es técnico ---
                     if es_logica_tecnico:
                         st.dataframe(
-                            resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                            resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
                             use_container_width=True, 
                             hide_index=True
                         )
                     else:
-                        st.dataframe(resumen, use_container_width=True, hide_index=True)
+                        # --- Aplicar solo redondeo si es supervisor ---
+                        st.dataframe(
+                            resumen.style.format({'Eficiencia_Total_%': '{:.1f}'}),
+                            use_container_width=True, 
+                            hide_index=True
+                        )
                     
                     excel_data_resumen_sup = to_excel(resumen)
                     if excel_data_resumen_sup:
@@ -1324,27 +1341,32 @@ if menu == "🏠 Principal":
         agrupar_por = 'Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Asignado_A'
         titulo_resumen = 'Resumen por Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Resumen por Técnico'
         
-        # --- MODIFICACIÓN: Determinar qué lógica usar ---
+        # --- Determinar qué lógica usar ---
         es_logica_tecnico = (agrupar_por == 'Asignado_A')
 
         st.subheader(f"👥 {titulo_resumen}")
         if agrupar_por in df_unicos.columns:
             
-            # --- MODIFICACIÓN: Pasar el flag de lógica ---
+            # --- Pasar el flag de lógica ---
             resumen = crear_resumen_admin(df_unicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico)
             
             if not resumen.empty:
                 resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                 
-                # --- MODIFICACIÓN: Aplicar estilo SÓLO si es técnico ---
+                # --- Aplicar estilo SÓLO si es técnico ---
                 if es_logica_tecnico:
                     st.dataframe(
-                        resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1), 
+                        resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
                         use_container_width=True, 
                         hide_index=True
                     )
                 else:
-                    st.dataframe(resumen, use_container_width=True, hide_index=True)
+                    # --- Aplicar solo redondeo si es supervisor ---
+                    st.dataframe(
+                        resumen.style.format({'Eficiencia_Total_%': '{:.1f}'}),
+                        use_container_width=True, 
+                        hide_index=True
+                    )
                 
                 excel_data_resumen_sup = to_excel(resumen)
                 if excel_data_resumen_sup:
