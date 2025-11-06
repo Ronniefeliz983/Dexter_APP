@@ -815,11 +815,12 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         
         if st.session_state.user_role == "admin":
             # Para el Admin
+            
+            # --- CORRECCIÓN (Eliminado critical_metric_key=...) ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
+            # --- CORRECCIÓN ---
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
             
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
@@ -838,13 +839,14 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             
             # ¡AQUÍ APLICAMOS LA LÓGICA ESPECIAL!
             # La métrica "Total (Nuevos Hoy)"
+            
+            # --- CORRECCIÓN ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
             
             # La métrica "Pendientes"
+            # --- CORRECCIÓN ---
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
             
             # Las otras métricas siguen igual (normales)
@@ -859,29 +861,36 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
             eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
             col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+            
     else: # Para las otras páginas (no-principal)
         col1, col2, col3, col4 = st.columns(4)
         if st.session_state.user_role == "admin":
+            
+            # --- CORRECCIÓN (Esta era la línea del traceback) ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
+            
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
+            
+            # --- CORRECCIÓN ---
             metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
+            
             col5, col6, col7, col8 = st.columns(4)
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
             metric_with_critical(col6, "📤 Referidos", 'Referidos')
             metric_with_critical(col7, "📅 Citados", 'Citados')
             metric_with_critical(col8, "🔄 Rebote", 'Rebote')
         else:
+            
+            # --- CORRECCIÓN ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
+            
+            # --- CORRECCIÓN ---
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
-                                 critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
             
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
@@ -1426,7 +1435,7 @@ elif menu == "🔍 Tracking Ticket":
     if ticket_busqueda:
         # 2. Llamar a la función de búsqueda usando el historial COMPLETO
         df_track = filtrar_dataframe_con_historial(
-            df_full_historial,           # El historial completo (Haystack)
+            df_full_historial,         # El historial completo (Haystack)
             df_supervisor_unicos_MASTER, # Los únicos de todo el historial (para encontrar IDs)
             ticket_busqueda, 
             supervisor_filter, 
@@ -1443,7 +1452,7 @@ elif menu == "🔍 Tracking Ticket":
 
             for orden_externa in df_track['OrdenExterna'].unique():
                 ts_col_valid_track = ('Timestamp_Procesado' in df_track.columns and
-                                        pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
+                                      pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
 
                 if ts_col_valid_track:
                     historial_ticket = df_track[df_track['OrdenExterna'] == orden_externa].sort_values('Timestamp_Procesado', ascending=False, na_position='last')
