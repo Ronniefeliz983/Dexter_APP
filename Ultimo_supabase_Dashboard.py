@@ -748,7 +748,7 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 
 # ---
-# --- ¡FUNCIÓN MEJORADA Y CORREGIDA! ---
+# --- ¡FUNCIÓN MEJORADA Y CORREGIDA! (Esta es la que soluciona el TypeError) ---
 # ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     """
@@ -758,6 +758,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
     """
     
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
+        """Función interna para manejar la lógica de 'Críticos'."""
         value_to_display = kpis.get(key, 0)
         if not isinstance(value_to_display, (int, float)): value_to_display = 0
 
@@ -813,7 +814,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         col1, col2, col3, col4, col5 = st.columns(5)
         
         if st.session_state.user_role == "admin":
-            # Para el Admin, "Total" es la que puede ser crítica
+            # Para el Admin
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
                                  critical_metric_key=critical_metric_key, 
                                  delta_text=critical_delta_text)
