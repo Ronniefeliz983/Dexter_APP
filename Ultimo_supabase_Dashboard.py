@@ -441,7 +441,7 @@ def cargar_datos():
                  df[col] = df[col].dt.tz_localize(None)
     # --- FIN CORRECCIÓN v2.7.2 ---
 
-    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
+    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime664_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
         mask_valid_oe = df['OE_Creacion'].notna()
         if mask_valid_oe.any():
             pyme_info = df.loc[mask_valid_oe, 'OE_Creacion'].apply(lambda x: pd.Series(calcular_pyme_y_vence(x), index=['PYME', 'Vence en']))
@@ -748,7 +748,7 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 
 # ---
-# --- ¡FUNCIÓN MEJORADA Y CORREGIDA! (Esta es la que soluciona el TypeError) ---
+# --- ¡FUNCIÓN MEJORADA Y CORREGIDA! (Soluciona el TypeError y el error visual) ---
 # ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     """
@@ -762,14 +762,16 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         value_to_display = kpis.get(key, 0)
         if not isinstance(value_to_display, (int, float)): value_to_display = 0
 
-        # --- INICIO DE LA MODIFICACIÓN ---
+        # --- INICIO DE LA MODIFICACIÓN CLAVE ---
         # Si esta es la métrica crítica Y tiene un valor positivo...
         if key == critical_metric_key and value_to_display > 0:
-            # Usamos el contenedor para que tome el estilo de "tarjeta" del CSS
-            # (Esta es la solución del "canva" con HTML)
-            with col: # APLICAR AL CONTENEDOR DE COLUMNA
-                with st.container(border=True):
-                    # La altura mínima (104px) se define en el CSS global
+            
+            # 1. NO LLAMAMOS A col.metric()
+            # 2. En su lugar, usamos un 'st.container' para que tome el estilo CSS
+            with col: 
+                with st.container(border=True): # Esto crea la tarjeta blanca
+                    
+                    # 3. Usamos st.markdown para RENDERIZAR el HTML
                     st.markdown(f"""
                     <div style="position: relative;"> 
                         <div style="
@@ -799,12 +801,13 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
                             </div>
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
-        # --- FIN DE LA MODIFICACIÓN ---
+                    """, unsafe_allow_html=True) # <-- El parámetro mágico
+        # --- FIN DE LA MODIFICACIÓN CLAVE ---
 
         # Si es la métrica crítica pero vale 0, muéstrala normal
         elif key == critical_metric_key and value_to_display <= 0 :
             col.metric(label, value_to_display)
+            
         # Para todas las demás métricas, muéstralas normal
         else:
             col.metric(label, value_to_display)
@@ -815,17 +818,15 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         
         if st.session_state.user_role == "admin":
             # Para el Admin
-            
-            # --- CORRECCIÓN (Eliminado critical_metric_key=...) ---
+            # (Se eliminó el argumento de palabra clave 'critical_metric_key=' que causaba el TypeError)
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
                                  delta_text=critical_delta_text)
-            # --- CORRECCIÓN ---
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
                                  delta_text=critical_delta_text)
-            
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            
             col6, col7, col8, col9, col10 = st.columns(5)
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col6.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
@@ -836,23 +837,14 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col10, "🔄 Rebote", 'Rebote')
         else: 
             # Para Supervisores/Gerencia
-            
-            # ¡AQUÍ APLICAMOS LA LÓGICA ESPECIAL!
-            # La métrica "Total (Nuevos Hoy)"
-            
-            # --- CORRECCIÓN ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
                                  delta_text=critical_delta_text)
-            
-            # La métrica "Pendientes"
-            # --- CORRECCIÓN ---
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
                                  delta_text=critical_delta_text)
-            
-            # Las otras métricas siguen igual (normales)
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col5, "📤 Referidos", 'Referidos')
+            
             col6, col7, col8, col9, col10 = st.columns(5)
             metric_with_critical(col6, "📅 Citados", 'Citados')
             metric_with_critical(col7, "🔄 Rebote", 'Rebote')
@@ -865,16 +857,11 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
     else: # Para las otras páginas (no-principal)
         col1, col2, col3, col4 = st.columns(4)
         if st.session_state.user_role == "admin":
-            
-            # --- CORRECCIÓN (Esta era la línea del traceback) ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
                                  delta_text=critical_delta_text)
-            
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
-            
-            # --- CORRECCIÓN ---
             metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', 
                                  delta_text=critical_delta_text)
             
@@ -884,17 +871,13 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col7, "📅 Citados", 'Citados')
             metric_with_critical(col8, "🔄 Rebote", 'Rebote')
         else:
-            
-            # --- CORRECCIÓN ---
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
                                  delta_text=critical_delta_text)
-            
-            # --- CORRECCIÓN ---
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
                                  delta_text=critical_delta_text)
-            
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col4, "📤 Referidos", 'Referidos')
+
             col5, col6, col7, col8 = st.columns(4)
             metric_with_critical(col5, "📅 Citados", 'Citados')
             metric_with_critical(col6, "🔄 Rebote", 'Rebote')
