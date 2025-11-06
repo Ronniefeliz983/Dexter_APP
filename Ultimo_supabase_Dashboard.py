@@ -22,7 +22,8 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.3", layout="wide") # <-- Versión actualizada
+# Versión actualizada para reflejar los cambios de Reabiertos
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.4", layout="wide") 
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
@@ -370,6 +371,7 @@ def calcular_kpis(df, df_full_historial):
     }
 # --- End of KPI Calculation Function ---
 
+
 # --- NUEVA FUNCIÓN DE ANÁLISIS v2.7.3 ---
 @st.cache_data(ttl=60)
 def analizar_reabiertos(_df_historial, _df_reabiertos):
@@ -528,8 +530,12 @@ def cargar_datos_reabiertos():
         if 'fecha' in df_sql.columns:
             df_sql['fecha'] = pd.to_datetime(df_sql['fecha'], errors='coerce', dayfirst=True, format='mixed')
         
+        # Normalizamos las columnas de supervisor para los filtros
         if 'supervisor' in df_sql.columns:
             df_sql['supervisor'] = df_sql['supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+        if 'tarjeta_Supervisor' in df_sql.columns:
+            df_sql['tarjeta_Supervisor'] = df_sql['tarjeta_Supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+
 
         return df_sql
     except Exception as e:
@@ -1349,7 +1355,8 @@ df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
 st.sidebar.title("📌 Menú")
 
 # --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
-menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"] # <-- NUEVO v2.7.3
+# AÑADIDO "🔄 Reabiertos" v2.7.3
+menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"] 
 
 # 1. Añadir "Tracking Ticket" para todos EXCEPTO para 'admin'
 if st.session_state.user_role != "admin":
@@ -1798,59 +1805,105 @@ elif menu == "📈 Rendimiento":
             page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin
         )
 
-# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.3 ---
+# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.4 (CON FILTRO INDEPENDIENTE Y CORRECCIÓN DE ROL) ---
 elif menu == "🔄 Reabiertos":
-    st.title(f"🔄 Análisis de Reabiertos - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    
+    # 1. Título (ahora dinámico para el rol de supervisor)
+    if st.session_state.user_role == "supervisor":
+        st.title(f"🔄 Análisis de Reabiertos - {st.session_state.supervisor_id}")
+    else:
+        st.title(f"🔄 Análisis de Reabiertos")
+
     st.info("""
     Esta página compara la tabla `reabiertos` (columna `caso`) contra el historial de `historial_cambios` (columna `OrdenExterna`).
     
-    Muestra **solo** los casos de 'reabiertos' que actualmente se encuentran en estado **'activo'** o **'iniciado'** en KUNAI.
+    Muestra **solo** los casos de 'reabiertos' que actualmente se encuentran en estado **'activo'** o **'iniciado'** en KUNAI (de CUALQUIER fecha).
     Los resultados se ordenan por la fecha más reciente del reporte de 'reabiertos'.
     """)
     
-    # Los datos df_full_historial y df_reabiertos_full ya están cargados al inicio.
     if df_full_historial is None or df_full_historial.empty or df_reabiertos_full is None or df_reabiertos_full.empty:
         st.warning("No se pudieron cargar los datos de 'historial_cambios' o 'reabiertos' para el análisis.")
     else:
-        # 1. Realizar el análisis de cruce
-        df_coincidencias = analizar_reabiertos(df_full_historial, df_reabiertos_full)
         
-        # 2. Aplicar filtros de supervisor basados en el rol
-        df_filtrada_coincidencias = df_coincidencias.copy()
+        # 2. Obtener TODAS las coincidencias
+        df_coincidencias_TODAS = analizar_reabiertos(df_full_historial, df_reabiertos_full)
+
+        # 3. Pre-filtrar por ROL (Si es supervisor, solo ve lo suyo)
+        df_coincidencias_ROL = df_coincidencias_TODAS.copy()
         
+        # ***** INICIO DE LA CORRECCIÓN v2.7.4 *****
         if st.session_state.user_role == "supervisor":
-            if 'supervisor' in df_filtrada_coincidencias.columns:
-                df_filtrada_coincidencias = df_filtrada_coincidencias[
-                    df_filtrada_coincidencias['supervisor'].astype(str) == str(st.session_state.supervisor_id)
+            # Comparamos con 'tarjeta_Supervisor' (ID) en lugar de 'supervisor' (Nombre)
+            if 'tarjeta_Supervisor' in df_coincidencias_ROL.columns: 
+                df_coincidencias_ROL = df_coincidencias_ROL[
+                    df_coincidencias_ROL['tarjeta_Supervisor'].astype(str) == str(st.session_state.supervisor_id)
                 ]
-        elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
-            if 'supervisor' in df_filtrada_coincidencias.columns:
-                    df_filtrada_coincidencias = df_filtrada_coincidencias[
-                    df_filtrada_coincidencias['supervisor'].astype(str) == str(supervisor_sel)
+            else:
+                # Si la columna no existiera, se vacía para evitar mostrar datos incorrectos
+                st.warning("Columna 'tarjeta_Supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará.")
+                df_coincidencias_ROL = df_coincidencias_ROL.iloc[0:0] 
+        # ***** FIN DE LA CORRECCIÓN v2.7.4 *****
+
+        # 4. Crear el NUEVO filtro de supervisor LOCAL (en la página)
+        supervisor_options_reabiertos = ["Todos"]
+        # Usamos la columna 'supervisor' (nombres) para poblar el filtro
+        if not df_coincidencias_ROL.empty and 'supervisor' in df_coincidencias_ROL.columns:
+            supervisores_validos_reabiertos = sorted([str(s) for s in df_coincidencias_ROL['supervisor'].dropna().unique() if str(s).strip()])
+            supervisor_options_reabiertos.extend(supervisores_validos_reabiertos)
+        
+        st.markdown("---")
+        
+        supervisor_sel_local = "Todos"
+        # El filtro solo aparece para roles que ven a más de una persona
+        if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
+            supervisor_sel_local = st.selectbox(
+                "Filtrar por Supervisor (solo en esta página):", 
+                supervisor_options_reabiertos,
+                key="filtro_supervisor_reabiertos"
+            )
+        
+        # 5. Aplicar el filtro LOCAL
+        df_filtrada_final = df_coincidencias_ROL.copy()
+        if supervisor_sel_local != "Todos":
+            # Filtramos por la columna 'supervisor' (nombre) porque el selectbox usa nombres
+            if 'supervisor' in df_filtrada_final.columns:
+                df_filtrada_final = df_filtrada_final[
+                    df_filtrada_final['supervisor'].astype(str) == str(supervisor_sel_local)
                 ]
         
         st.markdown("---")
         
-        if df_filtrada_coincidencias.empty:
-            st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI (para el supervisor: {supervisor_sel}).")
+        # 6. Mostrar resultados
+        if df_filtrada_final.empty:
+            # Mensaje personalizado si es un supervisor
+            if st.session_state.user_role == "supervisor":
+                st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI (para el supervisor: {st.session_state.supervisor_id}).")
+            # Mensaje si el admin filtró y no encontró nada
+            elif supervisor_sel_local != "Todos":
+                st.info(f"🎉 No se encontraron reabiertos activos para el supervisor '{supervisor_sel_local}'.")
+            # Mensaje general
+            else:
+                st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI.")
         else:
-            st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_coincidencias))
+            st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_final))
             
-            # 3. Formatear para mostrar
-            # Usamos la función global formatear_para_display (que ya modificamos para incluir 'fecha')
-            df_display = formatear_para_display(df_filtrada_coincidencias)
+            # Formatear para mostrar
+            df_display = formatear_para_display(df_filtrada_final)
             
             st.dataframe(df_display, use_container_width=True, hide_index=True)
             
-            # 4. Botón de descarga
-            excel_data = to_excel(df_filtrada_coincidencias) # Reutilizamos la función de Excel
+            # Botón de descarga
+            excel_data = to_excel(df_filtrada_final)
             if excel_data:
                 st.download_button(
                     label="📥 Descargar Coincidencias (Excel)",
                     data=excel_data,
-                    file_name=f"reabiertos_activos_{supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"reabiertos_activos_{supervisor_sel_local}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
+
+# --- FIN DE LA PÁGINA DE REABIERTOS ---
+
 
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
