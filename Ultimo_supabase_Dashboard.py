@@ -825,7 +825,6 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
             return pd.Series(kpis_group)
         resumen_hora = df_grafico.groupby('Fecha_Hora').apply(agg_kpis_por_hora).reset_index()
         
-        # --- INICIO DE LA CORRECCIÓN AttributeError ---
         if dt_inicio is None or dt_fin is None:
             dt_inicio_ts = df_grafico['Fecha_Hora'].min()
             dt_fin_ts = df_grafico['Fecha_Hora'].max()
@@ -836,7 +835,6 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
             st.info("No hay datos en el rango seleccionado para mostrar la tendencia.")
             return
         all_hours_range = pd.date_range(start=dt_inicio_ts.floor('H'), end=dt_fin_ts.floor('H'), freq='H')
-        # --- FIN DE LA CORRECCIÓN AttributeError ---
         
         df_horas_completas = pd.DataFrame({'Fecha_Hora': all_hours_range})
         resumen_hora_completo = pd.merge(df_horas_completas, resumen_hora, on='Fecha_Hora', how='left')
@@ -1069,7 +1067,11 @@ def create_user_db(username, password, role, supervisor_id, nombre_supervisor):
             conn.commit()
         return True
     except Exception as e:
-        st.error(f"Error al crear usuario: {e}")
+        # Captura error de llave duplicada
+        if "UniqueViolation" in str(e):
+            st.error(f"Error: El username '{username}' ya existe.")
+        else:
+            st.error(f"Error al crear usuario: {e}")
         return False
 
 def update_user_db(username, password, role, supervisor_id, nombre_supervisor):
@@ -1140,7 +1142,8 @@ def render_admin_crud_page():
     
     st.info("""
     **Importante sobre Contraseñas:**
-    * **Crear/Actualizar:** Siempre debe ingresar una contraseña para crear. Al actualizar, si deja el campo vacío, la contraseña *no* cambiará. Si escribe una nueva, se encriptará y guardará.
+    * **Crear:** Se requiere una contraseña. Se guardará encriptada.
+    * **Actualizar:** Si dejas el campo "Nueva Contraseña" vacío, la contraseña antigua *no* cambiará. Si escribes una nueva, se encriptará y reemplazará la anterior.
     * **Migración:** Los usuarios con contraseñas antiguas (texto plano) podrán iniciar sesión una vez. Al hacerlo, su contraseña se actualizará automáticamente a una versión encriptada.
     """)
 
@@ -1179,8 +1182,7 @@ def render_admin_crud_page():
                     if success:
                         st.success(f"¡Usuario '{new_username}' creado exitosamente!")
                         st.cache_data.clear() # Limpiar caché para que get_all_users() se actualice
-                    else:
-                        st.error("No se pudo crear el usuario.")
+                        st.rerun()
 
     with tab3:
         st.subheader("Actualizar o Eliminar un Usuario Existente")
@@ -1226,23 +1228,30 @@ def render_admin_crud_page():
                     if success:
                         st.success(f"¡Usuario '{user_to_edit}' actualizado!")
                         st.cache_data.clear()
-                        # st.rerun() # Opcional: recargar la página
+                        st.rerun()
                 
                 if submitted_delete:
-                    # Este es un hack simple para confirmación
-                    if 'confirm_delete' not in st.session_state:
-                        st.session_state.confirm_delete = False
-                    
-                    if st.checkbox(f"Confirmo que quiero eliminar a **{user_to_edit}**", key="delete_confirm_check"):
-                        if st.form_submit_button("Confirmar Eliminación", type="primary"):
-                            success = delete_user_db(user_to_edit)
-                            if success:
-                                st.success(f"¡Usuario '{user_to_edit}' eliminado!")
-                                st.cache_data.clear()
-                                st.session_state.confirm_delete = False
-                                st.rerun()
+                    if user_to_edit == st.session_state.username:
+                         st.error("No puedes eliminar al usuario con el que estás logueado.")
                     else:
-                        st.warning("Debes confirmar la eliminación marcando la casilla.")
+                        st.session_state[f'confirm_delete_{user_to_edit}'] = True
+            
+            # Lógica de confirmación de borrado (fuera del form)
+            if st.session_state.get(f'confirm_delete_{user_to_edit}'):
+                st.warning(f"**¿Estás seguro de que quieres eliminar a {user_to_edit}?** Esta acción es irreversible.")
+                col_confirm, col_cancel = st.columns(2)
+                with col_confirm:
+                    if st.button("SÍ, ELIMINAR A ESTE USUARIO", type="primary", use_container_width=True):
+                        success = delete_user_db(user_to_edit)
+                        if success:
+                            st.success(f"¡Usuario '{user_to_edit}' eliminado!")
+                            st.cache_data.clear()
+                            st.session_state[f'confirm_delete_{user_to_edit}'] = False
+                            st.rerun()
+                with col_cancel:
+                    if st.button("Cancelar", use_container_width=True):
+                        st.session_state[f'confirm_delete_{user_to_edit}'] = False
+                        st.rerun()
 
 # --- FIN DE LA PÁGINA CRUD ---
 
@@ -1254,18 +1263,19 @@ df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
 
 st.sidebar.title("📌 Menú")
 
-# --- ¡MODIFICADO! Añadir el menú de Admin ---
+# --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
 menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento"]
-if st.session_state.user_role not in ["admin", "supervisor_old"]:
-    # Si NO es admin, añadir Tracking
-    menu_options_base.insert(4, "🔍 Tracking Ticket")
 
+# 1. Añadir "Tracking Ticket" para todos EXCEPTO para 'admin'
+if st.session_state.user_role != "admin":
+    menu_options_base.insert(4, "🔍 Tracking Ticket") # Lo inserta después de "Citas Puntuales"
+
+# 2. Añadir "Admin Usuarios" SÓLO para 'admin' y 'supervisor_old'
 if st.session_state.user_role in ["admin", "supervisor_old"]:
-    # Si ES admin o supervisor_old, añadir el CRUD
-    menu_options_base.append("⚙️ Admin Usuarios")
+    menu_options_base.append("⚙️ Admin Usuarios") # Lo añade al final
     
 menu = st.sidebar.radio("Selecciona una página", menu_options_base)
-# --- FIN DE MODIFICACIÓN DE MENÚ ---
+# --- FIN DE LA CORRECCIÓN DE MENÚ ---
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Filtros")
