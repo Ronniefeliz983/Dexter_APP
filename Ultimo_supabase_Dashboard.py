@@ -993,50 +993,84 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
 
-def render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key="hourly_efficiency_chart"):
-    """Calcula y renderiza el gráfico de eficiencia por hora."""
+# --- ¡INICIO DE LA MODIFICACIÓN DEL GRÁFICO! ---
+def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly_trend_chart", dt_inicio=None, dt_fin=None):
+    """
+    Calcula y renderiza el gráfico de tendencia de tickets MANEJADOS por hora.
+    """
     st.markdown("---")
-    st.subheader("⏱️ Eficiencia por Hora del Día (Según Timestamp)")
+    st.subheader("📊 Tendencia de Tickets Manejados por Hora")
+    
     try:
         df_grafico = df_page_data.copy()
-        df_grafico['Hora'] = df_grafico['Timestamp_Procesado'].dt.hour
         
+        # 1. Agrupar por la hora exacta (truncada)
+        df_grafico['Fecha_Hora'] = df_grafico['Timestamp_Procesado'].dt.floor('H')
+        
+        # 2. Calcular KPIs para cada bloque de hora
         def agg_kpis_por_hora(group):
             kpis_group = calcular_kpis(group, df_full_historial) 
             return pd.Series(kpis_group)
 
-        resumen_hora = df_grafico.groupby('Hora').apply(agg_kpis_por_hora).reset_index()
+        resumen_hora = df_grafico.groupby('Fecha_Hora').apply(agg_kpis_por_hora).reset_index()
 
-        if 'Eficiencia_Total_%' not in resumen_hora.columns: resumen_hora['Eficiencia_Total_%'] = 0.0
-        if 'Eficiencia_Inicial' not in resumen_hora.columns: resumen_hora['Eficiencia_Inicial'] = 0.0
+        # 3. Asegurar el rango completo de horas (para mostrar ceros)
+        if dt_inicio is None or dt_fin is None:
+            # Fallback si las fechas no se pasaron (aunque deberían)
+            dt_inicio = df_grafico['Fecha_Hora'].min()
+            dt_fin = df_grafico['Fecha_Hora'].max()
 
-        horas_completas = pd.DataFrame({'Hora': range(24)})
-        resumen_hora = pd.merge(horas_completas, resumen_hora, on='Hora', how='left').fillna(0)
+        if pd.isna(dt_inicio) or pd.isna(dt_fin):
+            st.info("No hay datos en el rango seleccionado para mostrar la tendencia.")
+            return
 
-        resumen_hora_melted = resumen_hora.melt(
-            id_vars=['Hora'],
-            value_vars=['Eficiencia_Total_%', 'Eficiencia_Inicial'],
-            var_name='Tipo de Eficiencia',
-            value_name='Eficiencia'
+        # Crear un rango completo de horas desde el inicio hasta el fin de la selección
+        all_hours_range = pd.date_range(start=dt_inicio.floor('H'), end=dt_fin.floor('H'), freq='H')
+        df_horas_completas = pd.DataFrame({'Fecha_Hora': all_hours_range})
+
+        # Fusionar con los datos agregados
+        resumen_hora_completo = pd.merge(df_horas_completas, resumen_hora, on='Fecha_Hora', how='left')
+
+        # Rellenar los vacíos (horas sin tickets) con 0
+        cols_a_rellenar = ['Total', 'Manejados', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes']
+        for col in cols_a_rellenar:
+            if col not in resumen_hora_completo.columns:
+                resumen_hora_completo[col] = 0
+            else:
+                resumen_hora_completo[col] = resumen_hora_completo[col].fillna(0).astype(int)
+
+        # 4. Crear el gráfico de línea de tendencia
+        fig_tendencia = px.line(
+            resumen_hora_completo,
+            x='Fecha_Hora',
+            y='Manejados', # <-- Cambiado de Eficiencia a Manejados
+            title="Tickets Manejados por Hora (Tendencia)",
+            markers=True,
+            text='Manejados' # <-- Mostrar el conteo en el gráfico
         )
-        fig_linea_eficiencia = px.line(
-            resumen_hora_melted, x='Hora', y='Eficiencia', color='Tipo de Eficiencia',
-            title="Eficiencia por Hora (Total vs. Inicial)", markers=True, text='Eficiencia'
+        
+        fig_tendencia.update_traces(
+            texttemplate='%{text}', 
+            textposition='top center'
         )
-        fig_linea_eficiencia.update_traces(texttemplate='%{text:.1f}%', textposition='top center')
-        fig_linea_eficiencia.update_layout(
-            xaxis_title="Hora del Día (0-23)", yaxis_title="Eficiencia (%)",
-            xaxis=dict(tickmode='linear', dtick=1, range=[-0.5, 23.5]), yaxis=dict(range=[0, 105]),
-            template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-            legend_title_text=''
+        fig_tendencia.update_layout(
+            xaxis_title="Fecha y Hora",
+            yaxis_title="Tickets Manejados (conteo)",
+            yaxis=dict(rangemode='tozero'), # Asegurar que el eje Y empiece en 0
+            template="plotly_dark", 
+            plot_bgcolor='rgba(0,0,0,0)', 
+            paper_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig_linea_eficiencia, use_container_width=True, key=chart_key)
+        st.plotly_chart(fig_tendencia, use_container_width=True, key=chart_key)
+        
     except Exception as e:
-        st.error(f"Error al generar el gráfico de línea de eficiencia: {e}")
+        st.error(f"Error al generar el gráfico de tendencia: {e}")
         st.error(traceback.format_exc())
+# --- ¡FIN DE LA MODIFICACIÓN DEL GRÁFICO! ---
 
 
-def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None):
+# --- MODIFICACIÓN: Se añade dt_inicio y dt_fin a la firma ---
+def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None, dt_inicio=None, dt_fin=None):
     """
     Función genérica para renderizar una página del dashboard.
     df_page_data = Datos únicos de HOY (NUEVOS DE HOY), ya filtrados.
@@ -1143,8 +1177,11 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         file_name=f"{page_key}_resumen_admin_{datetime.now().strftime('%Y%m%d')}.xlsx",
                         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     )
+                
+                # --- MODIFICACIÓN: Llamar al nuevo gráfico y pasar fechas ---
                 if page_key == "rendimiento":
-                    render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
+                    render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
+            
             except Exception as e:
                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
                 if not resumen_admin.empty:
@@ -1183,8 +1220,9 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         else:
             st.info("No hay datos de 'Asignado_A' para mostrar resumen.")
         
+        # --- MODIFICACIÓN: Llamar al nuevo gráfico y pasar fechas ---
         if page_key == "rendimiento":
-            render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
+            render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
 
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
@@ -1197,7 +1235,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
         titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
         
-        # --- Determinar qué lógica usar ---
+        # --- MODIFICACIÓN: Determinar qué lógica usar ---
         es_logica_tecnico = (agrupar_por == 'Asignado_A')
 
         if page_key == "principal" or page_key != "principal": # Lógica unificada
@@ -1205,13 +1243,13 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
                 
-                # --- Pasar el flag de lógica ---
+                # --- MODIFICACIÓN: Pasar el flag de lógica ---
                 resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico)
                 
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                     
-                    # --- Aplicar estilo SÓLO si es técnico ---
+                    # --- MODIFICACIÓN: Aplicar estilo SÓLO si es técnico ---
                     if es_logica_tecnico:
                         st.dataframe(
                             resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
@@ -1240,8 +1278,9 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             else:
                 st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
 
+        # --- MODIFICACIÓN: Llamar al nuevo gráfico y pasar fechas ---
         if page_key == "rendimiento":
-            render_hourly_efficiency_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart")
+            render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
 
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
@@ -1822,6 +1861,7 @@ elif menu == "📈 Rendimiento":
     if df_rendimiento.empty:
         st.warning("No hay datos en el rango de fecha/hora seleccionado con los filtros actuales.")
     else:
+        # --- MODIFICACIÓN: Pasar dt_inicio y dt_fin ---
         render_dashboard_page(
             title_prefix="Rendimiento",
             df_page_data=df_rendimiento,
@@ -1830,5 +1870,7 @@ elif menu == "📈 Rendimiento":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="rendimiento" 
+            page_key="rendimiento",
+            dt_inicio=dt_inicio,
+            dt_fin=dt_fin
         )
