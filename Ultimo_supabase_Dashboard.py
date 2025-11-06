@@ -44,6 +44,8 @@ st.markdown("""
         border-radius: 10px;
         padding: 15px; /* Espacio interior (reducido) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+        /* --- AÑADIDO PARA ALINEAR LA TARJETA MANUAL --- */
+        min-height: 104px; 
     }
     
     /* Oculta el borde por defecto de streamlit ya que usamos uno nuestro */
@@ -484,8 +486,8 @@ else:
         fecha_hoy = get_current_ast_time().date()
         
         if 'Timestamp_Procesado' in df_full_historial.columns and \
-           pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado']) and \
-           'OrdenExterna' in df_full_historial.columns:
+            pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado']) and \
+            'OrdenExterna' in df_full_historial.columns:
 
             # 2. Encontrar el PRIMER timestamp (el MÍNIMO) para CADA ticket en TODO el historial
             df_full_historial['Fecha_Nacimiento'] = df_full_historial.groupby('OrdenExterna')['Timestamp_Procesado'].transform('min')
@@ -744,6 +746,10 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 # FUNCIONES DE RENDERIZADO
 # ------------------------------------
+
+# ---
+# --- ¡FUNCIÓN MODIFICADA PARA MOVER "CRÍTICOS" AL LADO DEL NÚMERO! ---
+# ---
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     """Muestra la cuadrícula de KPIs."""
     
@@ -751,19 +757,65 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
         value_to_display = kpis.get(key, 0)
         if not isinstance(value_to_display, (int, float)): value_to_display = 0
 
+        # --- INICIO DE LA MODIFICACIÓN ---
+        # Si esta es la métrica crítica Y tiene un valor positivo...
         if key == critical_metric_key and value_to_display > 0:
-            col.metric(label, value_to_display, delta=critical_delta_text, delta_color="inverse")
+            # Usamos el contenedor para que tome el estilo de "tarjeta" del CSS
+            # (Esto es lo que llamas "canva")
+            with st.container(border=True):
+                # La altura mínima (104px) se define en el CSS global
+                st.markdown(f"""
+                <div style="position: relative;"> 
+                    <div style="
+                        font-family: 'sans serif'; 
+                        color: #31333F; /* Color de texto de tu tema */
+                        padding: 2px;
+                    ">
+                        <div style="font-size: 0.875rem; margin-bottom: 8px;">{label}</div>
+                        
+                        <div style="
+                            font-size: 1.875rem; 
+                            font-weight: 600; 
+                            line-height: 1.2; /* Ajuste para alinear mejor */
+                        ">
+                            <span style="margin-right: 8px; vertical-align: middle;">{value_to_display}</span>
+                            
+                            <span style="
+                                font-size: 0.75rem; 
+                                font-weight: 500;
+                                color: #d32f2f; /* Color de texto rojo */
+                                background-color: #ffebee; /* Fondo rojo claro */
+                                padding: 2px 6px;
+                                border-radius: 4px;
+                                display: inline-block; 
+                                vertical-align: middle; /* Centra verticalmente con el número */
+                            ">↑ {delta_text}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        # --- FIN DE LA MODIFICACIÓN ---
+
+        # Si es la métrica crítica pero vale 0, muéstrala normal
         elif key == critical_metric_key and value_to_display <= 0 :
             col.metric(label, value_to_display)
+        # Para todas las demás métricas, muéstralas normal
         else:
             col.metric(label, value_to_display)
 
+    # El resto de la función sigue igual
     if page_key == "principal":
         col1, col2, col3, col4, col5 = st.columns(5)
         
         if st.session_state.user_role == "admin":
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
-            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            # Para el Admin, "Total" es la que puede ser crítica
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
+            
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
@@ -776,8 +828,21 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col9, "📅 Citados", 'Citados')
             metric_with_critical(col10, "🔄 Rebote", 'Rebote')
         else: 
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
-            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            # Para Supervisores/Gerencia, "Pendientes" es la que es crítica
+            # (según tu código en la página principal)
+            
+            # ¡AQUÍ APLICAMOS LA LÓGICA ESPECIAL!
+            # La métrica "Total (Nuevos Hoy)"
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
+            
+            # La métrica "Pendientes"
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
+            
+            # Las otras métricas siguen igual (normales)
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col5, "📤 Referidos", 'Referidos')
@@ -789,22 +854,31 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
             eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
             col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
-    else: 
+    else: # Para las otras páginas (no-principal)
         col1, col2, col3, col4 = st.columns(4)
         if st.session_state.user_role == "admin":
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
-            metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
             col5, col6, col7, col8 = st.columns(4)
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
             metric_with_critical(col6, "📤 Referidos", 'Referidos')
             metric_with_critical(col7, "📅 Citados", 'Citados')
             metric_with_critical(col8, "🔄 Rebote", 'Rebote')
         else:
-            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', critical_metric_key == 'Total')
-            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', critical_metric_key == 'Pendientes')
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', 
+                                 critical_metric_key=critical_metric_key, 
+                                 delta_text=critical_delta_text)
+            
             metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col4, "📤 Referidos", 'Referidos')
             col5, col6, col7, col8 = st.columns(4)
@@ -837,8 +911,8 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
             supervisor_filter = global_supervisor_sel
 
         df_display_filtrado = filtrar_dataframe_con_historial(
-            df_full_historial,      # El historial completo (Haystack)
-            df_data_unicos_hoy,     # Los únicos de HOY (para encontrar IDs)
+            df_full_historial,     # El historial completo (Haystack)
+            df_data_unicos_hoy,    # Los únicos de HOY (para encontrar IDs)
             texto_busqueda, 
             supervisor_filter, 
             status_filter
@@ -916,32 +990,11 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
     # --- Vista Admin ---
     if role == "admin":
-        total_tickets_admin = kpis.get('Total', 0)
-        pendientes_admin_kpi = kpis.get('Pendientes', 0)
-        cerrados_admin = kpis.get('Cerrados', 0)
-        manejados_kpi_admin = kpis.get('Manejados', 0)
-        eficiencia_kpi_admin = kpis.get('Eficiencia_Total_%', 0.0)
-        total_iniciado_admin = kpis.get('Total_Iniciado', 0)
-        eficiencia_inicial_admin = kpis.get('Eficiencia_Inicial', 0.0)
-
-        if page_key == "principal":
-            st.subheader("📊 Resumen General (Todos los Supervisores - Nuevos Hoy)")
-            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6, col_kpi7 = st.columns(7)
-            col_kpi1.metric("Total (Nuevos Hoy)", total_tickets_admin)
-            col_kpi2.metric("Eficiencia Total", f"{eficiencia_kpi_admin:.1f}%")
-            col_kpi3.metric("Total Iniciado", total_iniciado_admin)
-            col_kpi4.metric("Eficiencia Inicial", f"{eficiencia_inicial_admin:.1f}%")
-            col_kpi5.metric("Cerrados", cerrados_admin)
-            col_kpi6.metric("Pendiente", pendientes_admin_kpi)
-            col_kpi7.metric("Manejados", manejados_kpi_admin)
-        else:
-            st.subheader("📊 Resumen General (Filtro Actual - Nuevos Hoy)")
-            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
-            col_kpi1.metric("Total (Nuevos Hoy)", total_tickets_admin)
-            col_kpi2.metric("Eficiencia", f"{eficiencia_kpi_admin:.1f}%")
-            col_kpi3.metric("Cerrados", cerrados_admin)
-            col_kpi4.metric("Pendiente", pendientes_admin_kpi)
-            col_kpi5.metric("Manejados", manejados_kpi_admin)
+        # (El código de Admin para las métricas de resumen ya no está aquí, 
+        # se maneja en display_kpi_metrics)
+        
+        # Muestra la cuadrícula de KPIs
+        display_kpi_metrics(kpis, page_key, critical_metric_key)
 
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
@@ -1171,10 +1224,14 @@ if menu == "🏠 Principal":
             role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel,
             status_filter=estatus_sel,
-            page_key="principal" 
+            page_key="principal",
+            critical_metric_key='Pendientes' # Para Gerencia/Admin, 'Pendientes' es crítico
         )
     else: # Vista Supervisor/Supervisor_Old
         kpis_supervisor = calcular_kpis(df_unicos, df_full_historial)
+        
+        # --- ¡AQUÍ SE PASA LA LLAVE CRÍTICA! ---
+        # Para Supervisores, la métrica crítica es 'Pendientes'
         display_kpi_metrics(kpis_supervisor, page_key="principal", critical_metric_key='Pendientes')
         
         st.markdown("---")
@@ -1366,8 +1423,8 @@ elif menu == "🔍 Tracking Ticket":
     if ticket_busqueda:
         # 2. Llamar a la función de búsqueda usando el historial COMPLETO
         df_track = filtrar_dataframe_con_historial(
-            df_full_historial,            # El historial completo (Haystack)
-            df_supervisor_unicos_MASTER,  # Los únicos de todo el historial (para encontrar IDs)
+            df_full_historial,           # El historial completo (Haystack)
+            df_supervisor_unicos_MASTER, # Los únicos de todo el historial (para encontrar IDs)
             ticket_busqueda, 
             supervisor_filter, 
             None
@@ -1383,7 +1440,7 @@ elif menu == "🔍 Tracking Ticket":
 
             for orden_externa in df_track['OrdenExterna'].unique():
                 ts_col_valid_track = ('Timestamp_Procesado' in df_track.columns and
-                                      pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
+                                        pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
 
                 if ts_col_valid_track:
                     historial_ticket = df_track[df_track['OrdenExterna'] == orden_externa].sort_values('Timestamp_Procesado', ascending=False, na_position='last')
@@ -1651,7 +1708,3 @@ elif menu == "📈 Rendimiento":
             status_filter=estatus_sel,
             page_key="rendimiento" 
         )
-
-
-
-
