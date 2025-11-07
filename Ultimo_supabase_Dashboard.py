@@ -22,7 +22,7 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.4", layout="wide") 
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.6", layout="wide") # <-- Versión actualizada
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
@@ -57,6 +57,12 @@ st.markdown("""
     }
     [data-testid="stVerticalBlock"] > div {
         gap: 0.5rem; /* El valor por defecto es 1rem */
+    }
+    
+    /* --- 4. (NUEVO v2.7.5) Estilo para tablas con highlighting --- */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -559,6 +565,15 @@ def cargar_datos_reabiertos():
 df_full_historial = cargar_datos()
 df_reabiertos_full = cargar_datos_reabiertos() # <-- NUEVA LÍNEA v2.7.3
 
+# ***** INICIO CAMBIO v2.7.5: Crear set de reabiertos para resaltar *****
+if df_reabiertos_full is not None and not df_reabiertos_full.empty and 'caso' in df_reabiertos_full.columns:
+    # Creamos un set (lista rápida) de todos los 'caso' en reabiertos
+    set_casos_reabiertos = set(df_reabiertos_full['caso'].dropna().astype(str))
+else:
+    set_casos_reabiertos = set() # Vacío si no hay datos
+# ***** FIN CAMBIO v2.7.5 *****
+
+
 if df_full_historial is None or df_full_historial.empty:
     st.error("No se pudieron cargar datos. Verifica la conexión a Supabase y que la tabla 'historial_cambios' no esté vacía.")
     st.stop()
@@ -644,6 +659,7 @@ def to_excel(df: pd.DataFrame):
     output = BytesIO()
     try:
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # Aplicamos el formateo de texto antes de guardar
             df_formateada = formatear_para_display(df.copy())
             if 'Eficiencia_Total_%' in df_formateada.columns:
                 df_formateada['Eficiencia_Total_%'] = pd.to_numeric(df_formateada['Eficiencia_Total_%'], errors='coerce').round(1)
@@ -886,24 +902,63 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
 
-def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix):
+# ***** INICIO CAMBIO v2.7.5: Función 'display_detail_table' actualizada *****
+def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix, reabiertos_set):
+    """
+    Muestra la tabla de detalles, ahora con resaltado para reabiertos.
+    'reabiertos_set' es un set de strings de 'caso'/'OrdenExterna' que están reabiertos.
+    """
     busqueda_key = f"buscar_{page_key}"
     texto_busqueda = st.text_input("🔍 Buscar en tabla", key=busqueda_key, placeholder="Buscar por Orden Externa, Cliente, Asignado...")
-    df_display_original = formatear_para_display(df_data_unicos_hoy.copy() if df_data_unicos_hoy is not None else pd.DataFrame())
+    
+    # Prepara el dataframe para mostrar ANTES de buscar (para el botón de descarga)
+    df_display_original = df_data_unicos_hoy.copy() if df_data_unicos_hoy is not None else pd.DataFrame()
+
     if texto_busqueda:
         supervisor_filter = None
         if role == "supervisor":
             supervisor_filter = role_supervisor_id
         elif role in ["admin", "gerencia", "supervisor_old"] and global_supervisor_sel != "Todos":
             supervisor_filter = global_supervisor_sel
+        
+        # Si hay búsqueda, el DataFrame se basa en el historial completo
         df_display_filtrado = filtrar_dataframe_con_historial(
             df_full_historial, df_data_unicos_hoy, texto_busqueda, 
             supervisor_filter, status_filter
         )
-        df_display_final = formatear_para_display(df_display_filtrado)
     else:
-        df_display_final = df_display_original
-    st.dataframe(df_display_final, use_container_width=True, hide_index=True)
+        # Si no hay búsqueda, el DataFrame es el original
+        df_display_filtrado = df_display_original
+
+    # Función de estilo que se aplicará a cada fila
+    def highlight_reabiertos(row):
+        # Usamos .get() para evitar errores si la columna no existe
+        orden_externa = str(row.get('OrdenExterna', ''))
+        
+        # Comprueba si la OrdenExterna está en el set de reabiertos
+        if orden_externa in reabiertos_set:
+            # Devuelve el estilo para toda la fila
+            # ***** ¡CAMBIO DE COLOR A AMARILLO! *****
+            return ['background-color: #fffacd; color: #5B4500;'] * len(row) 
+        else:
+            # Sin estilo
+            return [''] * len(row)
+
+    # Formatea los datos para visualización (fechas, None, etc.)
+    df_display_final = formatear_para_display(df_display_filtrado)
+
+    if not df_display_final.empty:
+        # Aplicar el estilo
+        st.dataframe(
+            df_display_final.style.apply(highlight_reabiertos, axis=1), 
+            use_container_width=True, 
+            hide_index=True
+        )
+    else:
+        # Mostrar un dataframe vacío si no hay resultados
+        st.dataframe(df_display_final, use_container_width=True, hide_index=True)
+
+    # El botón de descarga siempre usa los datos originales de la vista (sin filtro de texto)
     if not df_display_original.empty:
         excel_data = to_excel(df_display_original) 
         if excel_data:
@@ -913,6 +968,8 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
                 file_name=f"{file_name_prefix}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
+# ***** FIN CAMBIO v2.7.5 *****
+
 
 def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly_trend_chart", dt_inicio=None, dt_fin=None):
     st.markdown("---")
@@ -960,10 +1017,25 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
         st.error(f"Error al generar el gráfico de tendencia: {e}")
         st.error(traceback.format_exc())
 
-def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, critical_metric_key=None, dt_inicio=None, dt_fin=None):
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
+def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, critical_metric_key=None, dt_inicio=None, dt_fin=None):
     if df_page_data is None or df_page_data.empty:
         st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
+        
+        # AUNQUE NO HAYA DATOS, MOSTRAR TABLA VACÍA CON BUSCADOR (PARA TRACKING)
+        if page_key == "principal_sup" or page_key == "principal":
+             st.markdown("---")
+             st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
+             display_detail_table(
+                df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
+                role=role, role_supervisor_id=role_supervisor_id,
+                global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
+                page_key=page_key, file_name_prefix=page_key,
+                reabiertos_set=reabiertos_set 
+             )
         return
+        
     kpis = calcular_kpis(df_page_data, df_full_historial)
     if role == "admin":
         display_kpi_metrics(kpis, page_key, critical_metric_key)
@@ -1080,7 +1152,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
-        display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key)
+        # Pasa el set de reabiertos
+        display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
     else:
         display_kpi_metrics(kpis, page_key, critical_metric_key)
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
@@ -1122,8 +1195,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
-        display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key)
+        # Pasa el set de reabiertos
+        display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
 # --- End of Render Dashboard Function ---
+# ***** FIN CAMBIO v2.7.5 *****
 
 
 # --- ¡NUEVO! FUNCIONES CRUD PARA LA BASE DE DATOS ---
@@ -1415,12 +1490,36 @@ if not df_supervisor_unicos.empty:
         else:
             df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
 
+# ***** INICIO CAMBIO v2.7.6 *****
+# Ahora, basándonos en df_supervisor_unicos, creamos el filtro Asignado_A
+asignado_a_options = []
+if not df_supervisor_unicos.empty and 'Asignado_A' in df_supervisor_unicos.columns:
+    asignado_a_options = sorted([str(s) for s in df_supervisor_unicos['Asignado_A'].dropna().unique() if str(s).strip()])
+
+asignado_sel = [] # Inicializar
+if st.session_state.user_role == "supervisor": # Solo para este rol
+    if not asignado_a_options:
+        st.sidebar.info("No hay técnicos asignados para filtrar.")
+    else:
+        asignado_sel = st.sidebar.multiselect("Asignado A", options=asignado_a_options, default=asignado_a_options)
+# ***** FIN CAMBIO v2.7.6 *****
+
+
 df_unicos = df_supervisor_unicos.copy() if df_supervisor_unicos is not None else pd.DataFrame()
 if not df_unicos.empty and estatus_sel:
     if 'Estado' in df_unicos.columns:
         df_unicos = df_unicos[df_unicos['Estado'].astype(str).isin(estatus_sel)]
     elif not df_unicos.empty:
         df_unicos = pd.DataFrame(columns=df_supervisor_unicos.columns if df_supervisor_unicos is not None else [])
+
+# ***** INICIO CAMBIO v2.7.6: Aplicar filtro Asignado_A *****
+if not df_unicos.empty and asignado_sel: # Si se seleccionó algo en el filtro Asignado_A
+    if 'Asignado_A' in df_unicos.columns:
+        df_unicos = df_unicos[df_unicos['Asignado_A'].astype(str).isin(asignado_sel)]
+    elif not df_unicos.empty:
+        # Si el filtro está activo pero la columna no existe, vaciar
+        df_unicos = df_unicos.iloc[0:0] 
+# ***** FIN CAMBIO v2.7.6 *****
 
 
 # --------------------------
@@ -1435,6 +1534,7 @@ if menu == "🏠 Principal":
             title_prefix="Principal", df_page_data=df_unicos, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="principal",
+            reabiertos_set=set_casos_reabiertos, # <-- PASANDO REABIERTOS
             critical_metric_key='Pendientes' 
         )
     else: 
@@ -1478,7 +1578,8 @@ if menu == "🏠 Principal":
             df_data_unicos_hoy=df_unicos, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
-            page_key="principal_sup", file_name_prefix="principal"
+            page_key="principal_sup", file_name_prefix="principal",
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
 elif menu == "📊 Análisis PYMEs":
@@ -1490,7 +1591,8 @@ elif menu == "📊 Análisis PYMEs":
     render_dashboard_page(
         title_prefix="Análisis PYMEs", df_page_data=df_pymes, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
-        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes" 
+        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes",
+        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
     )
 
 elif menu == "⏰ Puntualidad":
@@ -1507,7 +1609,8 @@ elif menu == "⏰ Puntualidad":
     render_dashboard_page(
         title_prefix="Puntualidad General", df_page_data=df_puntuales, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
-        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="puntualidad" 
+        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="puntualidad",
+        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
     )
 
 elif menu == "🎯 Citas Puntuales":
@@ -1561,7 +1664,8 @@ elif menu == "🎯 Citas Puntuales":
     render_dashboard_page(
         title_prefix="Citas Puntuales", df_page_data=df_citas, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
-        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="citas" 
+        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="citas",
+        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
     )
 
 elif menu == "🔍 Tracking Ticket":
@@ -1758,7 +1862,8 @@ elif menu == "📅 Antiguas":
         render_dashboard_page(
             title_prefix="Antigüedad 3 Días", df_page_data=df_3_dias, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
-            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="antiguas_3_dias" 
+            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="antiguas_3_dias",
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
     with tab2:
         fecha_limite = hoy - timedelta(days=3)
@@ -1770,7 +1875,8 @@ elif menu == "📅 Antiguas":
             title_prefix="Antigüedad Extrema", df_page_data=df_extrema, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
-            page_key="antiguas_extrema", critical_metric_key='Total'
+            page_key="antiguas_extrema", critical_metric_key='Total',
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
 elif menu == "📈 Rendimiento":
@@ -1811,7 +1917,8 @@ elif menu == "📈 Rendimiento":
             title_prefix="Rendimiento", df_page_data=df_rendimiento, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
-            page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin
+            page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin,
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
 # --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.4 (CON FILTRO INDEPENDIENTE Y CORRECCIÓN DE ROL) ---
