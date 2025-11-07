@@ -34,7 +34,7 @@ st.markdown("""
         border-radius: 10px; /* Bordes redondeados */
         padding: 15px; /* Espacio interior (reducido para ser más compacto) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
-        height: 140px; /* MEJORA: Altura mínima para alinear */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     [data-testid="stVerticalBlockBorderWrapper"] {
         background-color: #ffffff;
@@ -42,7 +42,7 @@ st.markdown("""
         border-radius: 10px;
         padding: 15px; /* Espacio interior (reducido) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-        height: 140px; /* MEJORA: Altura mínima para alinear */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     [data-testid="stVerticalBlockBorderWrapper"] > div { border: none; }
 
@@ -2059,7 +2059,5 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
-
 
 
