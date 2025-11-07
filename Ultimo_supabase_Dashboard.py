@@ -22,7 +22,7 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.8", layout="wide") # <-- Versión actualizada
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.7", layout="wide") # <-- Versión actualizada
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
@@ -377,12 +377,11 @@ def calcular_kpis(df, df_full_historial):
 # --- End of KPI Calculation Function ---
 
 
-# --- INICIO CAMBIO v2.7.7: 'analizar_reabiertos' ahora retorna el ESTADO ---
+# --- NUEVA FUNCIÓN DE ANÁLISIS v2.7.3 ---
 @st.cache_data(ttl=60)
 def analizar_reabiertos(_df_historial, _df_reabiertos):
     """
     Compara reabiertos['caso'] con historial['OrdenExterna'] que estén 'activo' o 'iniciado'.
-    AHORA DEVUELVE TAMBIÉN EL ESTADO ACTUAL DE KUNAI.
     """
     if _df_historial is None or _df_historial.empty or _df_reabiertos is None or _df_reabiertos.empty:
         return pd.DataFrame()
@@ -395,10 +394,9 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
 
         # 2. Filtrar el historial por 'activo' e 'iniciado'
         estados_activos = ['activo', 'iniciado']
-        # Mantenemos 'Estado' y 'OrdenExterna' para el join
         df_activos_iniciados = df_historial_unicos[
             df_historial_unicos['Estado'].astype(str).str.lower().isin(estados_activos)
-        ][['OrdenExterna', 'Estado']].copy()
+        ]
         
         if df_activos_iniciados.empty:
             return pd.DataFrame() # No hay tickets activos, por lo tanto no hay coincidencias
@@ -407,36 +405,24 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
         activos_iniciados_ids = set(df_activos_iniciados['OrdenExterna'])
         
         # 4. Encontrar las coincidencias en la tabla 'reabiertos'
+        #    Comparamos la columna 'caso' de reabiertos con el set de 'OrdenExterna'
         df_coincidencias = _df_reabiertos[
             _df_reabiertos['caso'].isin(activos_iniciados_ids)
         ].copy()
 
         if df_coincidencias.empty:
             return pd.DataFrame()
-            
-        # 5. AÑADIR EL ESTADO ACTUAL (EL "JOIN")
-        # Unimos las coincidencias de reabiertos con los estados activos/iniciados
-        df_coincidencias_con_estado = pd.merge(
-            df_coincidencias,
-            df_activos_iniciados,
-            left_on='caso',
-            right_on='OrdenExterna',
-            how='left'
-        )
-        # Renombramos la nueva columna de estado para que no haya conflicto
-        df_coincidencias_con_estado.rename(columns={'Estado': 'Estado_KUNAI'}, inplace=True)
 
-
-        # 6. Ordenar por 'fecha' (la función de carga ya la convirtió a datetime)
-        if 'fecha' in df_coincidencias_con_estado.columns and pd.api.types.is_datetime64_any_dtype(df_coincidencias_con_estado['fecha']):
-            df_coincidencias_con_estado = df_coincidencias_con_estado.sort_values('fecha', ascending=False)
+        # 5. Ordenar por 'fecha' (la función de carga ya la convirtió a datetime)
+        if 'fecha' in df_coincidencias.columns and pd.api.types.is_datetime64_any_dtype(df_coincidencias['fecha']):
+            df_coincidencias = df_coincidencias.sort_values('fecha', ascending=False)
         
-        return df_coincidencias_con_estado
+        return df_coincidencias
     except Exception as e:
         st.error(f"Error en analizar_reabiertos: {e}")
         st.error(traceback.format_exc())
         return pd.DataFrame()
-# --- FIN CAMBIO v2.7.7 ---
+# --- FIN DE LA NUEVA FUNCIÓN ---
 
 
 # --- Mapeo y Carga de Datos (Sin Cambios) ---
@@ -574,22 +560,18 @@ def cargar_datos_reabiertos():
 
 
 # ==============================================================================
-# --- LÓGICA PRINCIPAL ---
+# --- LÓGICA PRINCIPAL (v2.7.1) ---
 # ==============================================================================
 df_full_historial = cargar_datos()
-df_reabiertos_full = cargar_datos_reabiertos() 
+df_reabiertos_full = cargar_datos_reabiertos() # <-- NUEVA LÍNEA v2.7.3
 
-# ***** INICIO CAMBIO v2.7.8: Crear set de reabiertos (CORREGIDO) *****
-# Esta es la lógica correcta:
-# 1. Analiza cuáles reabiertos están activos/iniciados
-df_reabiertos_ACTIVOS = analizar_reabiertos(df_full_historial, df_reabiertos_full)
-
-# 2. Crea el set solo con esos
-if df_reabiertos_ACTIVOS is not None and not df_reabiertos_ACTIVOS.empty and 'caso' in df_reabiertos_ACTIVOS.columns:
-    set_casos_reabiertos = set(df_reabiertos_ACTIVOS['caso'].dropna().astype(str))
+# ***** INICIO CAMBIO v2.7.5: Crear set de reabiertos para resaltar *****
+if df_reabiertos_full is not None and not df_reabiertos_full.empty and 'caso' in df_reabiertos_full.columns:
+    # Creamos un set (lista rápida) de todos los 'caso' en reabiertos
+    set_casos_reabiertos = set(df_reabiertos_full['caso'].dropna().astype(str))
 else:
-    set_casos_reabiertos = set() # Vacío si no hay coincidencias
-# ***** FIN CAMBIO v2.7.8 *****
+    set_casos_reabiertos = set() # Vacío si no hay datos
+# ***** FIN CAMBIO v2.7.5 *****
 
 
 if df_full_historial is None or df_full_historial.empty:
@@ -643,10 +625,12 @@ def formatear_para_display(df_input):
         return df_input
     df_display = df_input.copy()
     
+    # --- INICIO CAMBIO v2.7.3: Añadir 'fecha' ---
     columnas_fechas_a_procesar = [
         'Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Vence en', 
         'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento', 'fecha'
     ]
+    # --- FIN CAMBIO v2.7.3 ---
     
     columnas_fechas_presentes = df_display.columns.intersection(columnas_fechas_a_procesar)
     for col in columnas_fechas_presentes:
@@ -1972,7 +1956,7 @@ elif menu == "📈 Rendimiento":
             reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
-# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.7 (CON MÉTRICAS DE ESTADO) ---
+# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.4 (CON FILTRO INDEPENDIENTE Y CORRECCIÓN DE ROL) ---
 elif menu == "🔄 Reabiertos":
     
     # 1. Título (ahora dinámico para el rol de supervisor)
@@ -1992,23 +1976,28 @@ elif menu == "🔄 Reabiertos":
         st.warning("No se pudieron cargar los datos de 'historial_cambios' o 'reabiertos' para el análisis.")
     else:
         
-        # 2. Obtener TODAS las coincidencias (ahora incluye 'Estado_KUNAI')
+        # 2. Obtener TODAS las coincidencias
         df_coincidencias_TODAS = analizar_reabiertos(df_full_historial, df_reabiertos_full)
 
         # 3. Pre-filtrar por ROL (Si es supervisor, solo ve lo suyo)
         df_coincidencias_ROL = df_coincidencias_TODAS.copy()
         
+        # ***** INICIO DE LA CORRECCIÓN v2.7.4 *****
         if st.session_state.user_role == "supervisor":
+            # Comparamos con 'tarjeta_supervisor' (minúscula)
             if 'tarjeta_supervisor' in df_coincidencias_ROL.columns: 
                 df_coincidencias_ROL = df_coincidencias_ROL[
                     df_coincidencias_ROL['tarjeta_supervisor'].astype(str) == str(st.session_state.supervisor_id)
                 ]
             else:
+                # Si la columna no existiera, se vacía para evitar mostrar datos incorrectos
                 st.warning("Columna 'tarjeta_supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará.")
                 df_coincidencias_ROL = df_coincidencias_ROL.iloc[0:0] 
-        
+        # ***** FIN DE LA CORRECCIÓN v2.7.4 *****
+
         # 4. Crear el NUEVO filtro de supervisor LOCAL (en la página)
         supervisor_options_reabiertos = ["Todos"]
+        # Usamos la columna 'supervisor' (nombres) para poblar el filtro
         if not df_coincidencias_ROL.empty and 'supervisor' in df_coincidencias_ROL.columns:
             supervisores_validos_reabiertos = sorted([str(s) for s in df_coincidencias_ROL['supervisor'].dropna().unique() if str(s).strip()])
             supervisor_options_reabiertos.extend(supervisores_validos_reabiertos)
@@ -2016,6 +2005,7 @@ elif menu == "🔄 Reabiertos":
         st.markdown("---")
         
         supervisor_sel_local = "Todos"
+        # El filtro solo aparece para roles que ven a más de una persona
         if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
             supervisor_sel_local = st.selectbox(
                 "Filtrar por Supervisor (solo en esta página):", 
@@ -2026,6 +2016,7 @@ elif menu == "🔄 Reabiertos":
         # 5. Aplicar el filtro LOCAL
         df_filtrada_final = df_coincidencias_ROL.copy()
         if supervisor_sel_local != "Todos":
+            # Filtramos por la columna 'supervisor' (nombre) porque el selectbox usa nombres
             if 'supervisor' in df_filtrada_final.columns:
                 df_filtrada_final = df_filtrada_final[
                     df_filtrada_final['supervisor'].astype(str) == str(supervisor_sel_local)
@@ -2035,39 +2026,25 @@ elif menu == "🔄 Reabiertos":
         
         # 6. Mostrar resultados
         if df_filtrada_final.empty:
+            # Mensaje personalizado si es un supervisor
             if st.session_state.user_role == "supervisor":
                 st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI (para el supervisor: {st.session_state.supervisor_id}).")
+            # Mensaje si el admin filtró y no encontró nada
             elif supervisor_sel_local != "Todos":
                 st.info(f"🎉 No se encontraron reabiertos activos para el supervisor '{supervisor_sel_local}'.")
+            # Mensaje general
             else:
                 st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI.")
         else:
+            st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_final))
             
-            # --- INICIO CAMBIO v2.7.7: Métricas de Estado ---
-            total_coincidencias = len(df_filtrada_final)
-            activos_count = 0
-            iniciados_count = 0
-            if 'Estado_KUNAI' in df_filtrada_final.columns:
-                activos_count = df_filtrada_final[df_filtrada_final['Estado_KUNAI'] == 'activo'].shape[0]
-                iniciados_count = df_filtrada_final[df_filtrada_final['Estado_KUNAI'] == 'iniciado'].shape[0]
-            
-            col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Total Coincidencias", total_coincidencias)
-            col_m2.metric("Estado 'Activo'", activos_count)
-            col_m3.metric("Estado 'Iniciado'", iniciados_count)
-            # --- FIN CAMBIO v2.7.7 ---
-
             # Formatear para mostrar
             df_display = formatear_para_display(df_filtrada_final)
             
-            # Reordenar columnas para mostrar el Estado_KUNAI
-            cols_reab = ['caso', 'codigo', 'tarjeta', 'supervisor', 'tarjeta_supervisor', 'fecha', 'condicion', 'Estado_KUNAI']
-            cols_reab_existentes = [c for c in cols_reab if c in df_display.columns]
-            
-            st.dataframe(df_display[cols_reab_existentes], use_container_width=True, hide_index=True)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
             
             # Botón de descarga
-            excel_data = to_excel(df_filtrada_final[cols_reab_existentes]) # Descarga solo las columnas mostradas
+            excel_data = to_excel(df_filtrada_final)
             if excel_data:
                 st.download_button(
                     label="📥 Descargar Coincidencias (Excel)",
@@ -2082,3 +2059,4 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
