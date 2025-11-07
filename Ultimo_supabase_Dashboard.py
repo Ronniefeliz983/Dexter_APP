@@ -22,7 +22,7 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.9", layout="wide") # <-- Versión actualizada
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.7", layout="wide") # <-- Versión actualizada
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
@@ -328,17 +328,14 @@ def get_earliest_batch_initial_cohort(df_full_historial):
         st.error(f"Error en get_earliest_batch_initial_cohort: {e}")
         return set()
 
-# --- INICIO CAMBIO v2.7.9: calcular_kpis ahora recibe reabiertos_set ---
-def calcular_kpis(df, df_full_historial, reabiertos_set):
+def calcular_kpis(df, df_full_historial):
     default_kpis = {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
             'Rebote': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
-            'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0,
-            'Reabiertos_Cerrados_Hoy': 0 # <-- NUEVO v2.7.9
+            'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0
         }
     if df is None or df.empty or 'Estado' not in df.columns or 'OrdenExterna' not in df.columns:
         return default_kpis
-    
     df_kpi = df.copy()
     df_kpi['Estado'] = df_kpi['Estado'].fillna('desconocido').astype(str).str.lower()
     total = len(df_kpi)
@@ -349,19 +346,6 @@ def calcular_kpis(df, df_full_historial, reabiertos_set):
     pendientes = df_kpi[df_kpi['Estado'].isin(['activo', 'iniciado'])].shape[0]
     manejados = cerrados + referidos + citados + rebote
     eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
-    
-    # --- NUEVA LÓGICA v2.7.9: Calcular Reabiertos Cerrados Hoy ---
-    reabiertos_cerrados_hoy = 0
-    if reabiertos_set and not df_kpi.empty:
-        # 1. Cuales de esta página son reabiertos? (Usamos el set_casos_reabiertos que ya está filtrado a solo activos/iniciados)
-        casos_reabiertos_en_pagina = set(df_kpi['OrdenExterna'].astype(str)) & reabiertos_set
-        
-        if casos_reabiertos_en_pagina:
-            # 2. De esos reabiertos, ¿cuáles están cerrados AHORA?
-            df_reabiertos_pagina = df_kpi[df_kpi['OrdenExterna'].astype(str).isin(casos_reabiertos_en_pagina)]
-            reabiertos_cerrados_hoy = df_reabiertos_pagina[df_reabiertos_pagina['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
-    # --- FIN LÓGICA v2.7.9 ---
-
     total_iniciado_en_pagina = 0
     manejados_inicial_en_pagina = 0
     eficiencia_inicial = 0.0
@@ -384,73 +368,61 @@ def calcular_kpis(df, df_full_historial, reabiertos_set):
             total_iniciado_en_pagina = 0
             manejados_inicial_en_pagina = 0
             eficiencia_inicial = 0.0
-            
     return {
         'Total': total, 'Cerrados': cerrados, 'Referidos': referidos, 'Citados': citados,
         'Rebote': rebote, 'Pendientes': pendientes, 'Manejados': manejados,
         'Eficiencia_Total_%': eficiencia_total, 'Total_Iniciado': total_iniciado_en_pagina, 
-        'Manejados_Inicial': manejados_inicial_en_pagina, 'Eficiencia_Inicial': eficiencia_inicial,
-        'Reabiertos_Cerrados_Hoy': reabiertos_cerrados_hoy # <-- NUEVO v2.7.9
+        'Manejados_Inicial': manejados_inicial_en_pagina, 'Eficiencia_Inicial': eficiencia_inicial 
     }
 # --- End of KPI Calculation Function ---
 
 
-# --- INICIO CAMBIO v2.7.9: Lógica de 'analizar_reabiertos' CORREGIDA ---
+# --- NUEVA FUNCIÓN DE ANÁLISIS v2.7.3 ---
 @st.cache_data(ttl=60)
-def analizar_reabiertos(_df_reabiertos, _df_snapshot_hoy):
+def analizar_reabiertos(_df_historial, _df_reabiertos):
     """
-    Compara reabiertos['caso'] con snapshot_hoy['orden_externa'].
-    Esta es la lógica correcta, ya que snapshot_hoy es la "verdad" actual.
+    Compara reabiertos['caso'] con historial['OrdenExterna'] que estén 'activo' o 'iniciado'.
     """
-    if _df_snapshot_hoy is None or _df_snapshot_hoy.empty or _df_reabiertos is None or _df_reabiertos.empty:
-        st.warning("No se pueden analizar reabiertos (snapshot o reabiertos vacíos).")
+    if _df_historial is None or _df_historial.empty or _df_reabiertos is None or _df_reabiertos.empty:
         return pd.DataFrame()
 
     try:
-        # 1. Obtener los datos necesarios del snapshot (la lista de KUNAI)
-        snapshot_data_raw = denormalizar_columnas_desde_sql(_df_snapshot_hoy.copy())
-        
-        if 'OrdenExterna' not in snapshot_data_raw.columns or 'Estado' not in snapshot_data_raw.columns:
-            st.error("Snapshot no tiene 'OrdenExterna' o 'Estado'. No se puede analizar reabiertos.")
+        # 1. Obtener el último estado de TODOS los tickets del historial
+        df_historial_unicos = obtener_datos_unicos(_df_historial)
+        if df_historial_unicos.empty:
             return pd.DataFrame()
-            
-        snapshot_data = snapshot_data_raw[['OrdenExterna', 'Estado']].copy()
-        
-        # 2. Obtener el set de IDs de snapshot (la "verdad" de 'activos' e 'iniciados')
-        snapshot_ids_set = set(snapshot_data['OrdenExterna'].astype(str).dropna())
-        
-        if not snapshot_ids_set:
-             st.info("Snapshot (activos/iniciados) está vacío. No hay reabiertos para mostrar.")
-             return pd.DataFrame() # No hay tickets activos
 
-        # 3. Encontrar las coincidencias en la tabla 'reabiertos'
+        # 2. Filtrar el historial por 'activo' e 'iniciado'
+        estados_activos = ['activo', 'iniciado']
+        df_activos_iniciados = df_historial_unicos[
+            df_historial_unicos['Estado'].astype(str).str.lower().isin(estados_activos)
+        ]
+        
+        if df_activos_iniciados.empty:
+            return pd.DataFrame() # No hay tickets activos, por lo tanto no hay coincidencias
+
+        # 3. Obtener el set de IDs para una búsqueda rápida
+        activos_iniciados_ids = set(df_activos_iniciados['OrdenExterna'])
+        
+        # 4. Encontrar las coincidencias en la tabla 'reabiertos'
+        #    Comparamos la columna 'caso' de reabiertos con el set de 'OrdenExterna'
         df_coincidencias = _df_reabiertos[
-            _df_reabiertos['caso'].astype(str).isin(snapshot_ids_set)
+            _df_reabiertos['caso'].isin(activos_iniciados_ids)
         ].copy()
 
         if df_coincidencias.empty:
             return pd.DataFrame()
-            
-        # 4. AÑADIR EL ESTADO ACTUAL (EL "JOIN")
-        df_coincidencias_con_estado = pd.merge(
-            df_coincidencias,
-            snapshot_data,
-            left_on='caso',
-            right_on='OrdenExterna',
-            how='left'
-        )
-        df_coincidencias_con_estado.rename(columns={'Estado': 'Estado_KUNAI'}, inplace=True)
+
+        # 5. Ordenar por 'fecha' (la función de carga ya la convirtió a datetime)
+        if 'fecha' in df_coincidencias.columns and pd.api.types.is_datetime64_any_dtype(df_coincidencias['fecha']):
+            df_coincidencias = df_coincidencias.sort_values('fecha', ascending=False)
         
-        # 5. Ordenar por 'fecha'
-        if 'fecha' in df_coincidencias_con_estado.columns and pd.api.types.is_datetime64_any_dtype(df_coincidencias_con_estado['fecha']):
-            df_coincidencias_con_estado = df_coincidencias_con_estado.sort_values('fecha', ascending=False)
-        
-        return df_coincidencias_con_estado
+        return df_coincidencias
     except Exception as e:
         st.error(f"Error en analizar_reabiertos: {e}")
         st.error(traceback.format_exc())
         return pd.DataFrame()
-# --- FIN CAMBIO v2.7.9 ---
+# --- FIN DE LA NUEVA FUNCIÓN ---
 
 
 # --- Mapeo y Carga de Datos (Sin Cambios) ---
@@ -479,34 +451,11 @@ def denormalizar_columnas_desde_sql(df_sql):
     mapeo_valido = {k: v for k, v in COLUMN_MAPPING_REVERSE.items() if v is not None}
     columnas_a_renombrar = {k: v for k, v in mapeo_valido.items() if k in df_sql.columns}
     df_csv = df_sql.rename(columns=columnas_a_renombrar)
-    
-    # --- INICIO CAMBIO v2.7.9: Asegurarnos que las columnas clave existan post-mapeo ---
-    columnas_esperadas = ['OrdenExterna', 'Estado', 'Supervisor', 'Asignado_A']
-    for col in columnas_esperadas:
-        if col not in df_csv.columns and col.lower() in df_csv.columns:
-            df_csv.rename(columns={col.lower(): col}, inplace=True)
-    # --- FIN CAMBIO v2.7.9 ---
-
-    # Devolvemos solo las columnas que SÍ existen y están en el mapeo
-    columnas_finales = [v for v in mapeo_valido.values() if v in df_csv.columns]
-    
-    # Añadir 'lote_procesado' si no estaba en el mapeo pero sí en el df_sql
-    if 'lote_procesado' in df_sql.columns and 'lote_procesado' not in columnas_finales:
-        columnas_finales.append('lote_procesado')
-        
-    # Asegurar que las columnas clave siempre estén
-    for col in columnas_esperadas:
-        if col in df_csv.columns and col not in columnas_finales:
-            columnas_finales.append(col)
-            
-    # Filtrar para devolver solo las columnas que realmente existen
-    columnas_existentes = [col for col in columnas_finales if col in df_csv.columns]
-    return df_csv[columnas_existentes]
-
+    columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
+    return df_csv[columnas_esperadas_presentes]
 
 @st.cache_data(ttl=60)
 def cargar_datos():
-    """Carga la tabla 'historial_cambios' de Supabase."""
     engine = get_database_engine()
     if engine is None:
         st.error("No hay conexión a la base de datos.")
@@ -609,54 +558,20 @@ def cargar_datos_reabiertos():
         return pd.DataFrame()
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
-# --- ¡NUEVO! v2.7.9: Cargar 'snapshot_hoy' ---
-@st.cache_data(ttl=60)
-def cargar_snapshot_hoy():
-    """Carga la tabla 'snapshot_hoy' de Supabase."""
-    engine = get_database_engine()
-    if engine is None:
-        st.error("No hay conexión a la base de datos.")
-        return pd.DataFrame()
-    try:
-        # Cargamos solo las columnas que necesitamos para el join
-        query = text("SELECT orden_externa, estado FROM snapshot_hoy")
-        with engine.connect() as conn:
-            df_sql = pd.read_sql(query, conn)
-        
-        if df_sql.empty:
-            st.warning("La tabla 'snapshot_hoy' (la lista de activos/iniciados de KUNAI) está vacía.")
-            return pd.DataFrame()
-        
-        # Denormalizar columnas (convertir de 'orden_externa' a 'OrdenExterna')
-        df = denormalizar_columnas_desde_sql(df_sql)
-        if 'Estado' in df.columns:
-            df['Estado'] = df['Estado'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
-        
-        return df
-
-    except Exception as e:
-        st.error(f"❌ Error al cargar datos desde 'snapshot_hoy': {e}")
-        return pd.DataFrame()
-# --- FIN v2.7.9 ---
-
 
 # ==============================================================================
-# --- LÓGICA PRINCIPAL ---
+# --- LÓGICA PRINCIPAL (v2.7.1) ---
 # ==============================================================================
 df_full_historial = cargar_datos()
-df_reabiertos_full = cargar_datos_reabiertos() 
-df_snapshot_hoy = cargar_snapshot_hoy() # <-- NUEVA LÍNEA v2.7.9
+df_reabiertos_full = cargar_datos_reabiertos() # <-- NUEVA LÍNEA v2.7.3
 
-# ***** INICIO CAMBIO v2.7.9: El set de reabiertos AHORA usa el SNAPSHOT *****
-# 1. Analiza cuáles reabiertos están EN EL SNAPSHOT (la verdad actual)
-df_reabiertos_ACTIVOS = analizar_reabiertos(df_reabiertos_full, df_snapshot_hoy)
-
-# 2. Crea el set solo con esos
-if df_reabiertos_ACTIVOS is not None and not df_reabiertos_ACTIVOS.empty and 'caso' in df_reabiertos_ACTIVOS.columns:
-    set_casos_reabiertos = set(df_reabiertos_ACTIVOS['caso'].dropna().astype(str))
+# ***** INICIO CAMBIO v2.7.5: Crear set de reabiertos para resaltar *****
+if df_reabiertos_full is not None and not df_reabiertos_full.empty and 'caso' in df_reabiertos_full.columns:
+    # Creamos un set (lista rápida) de todos los 'caso' en reabiertos
+    set_casos_reabiertos = set(df_reabiertos_full['caso'].dropna().astype(str))
 else:
-    set_casos_reabiertos = set() # Vacío si no hay coincidencias
-# ***** FIN CAMBIO v2.7.9 *****
+    set_casos_reabiertos = set() # Vacío si no hay datos
+# ***** FIN CAMBIO v2.7.5 *****
 
 
 if df_full_historial is None or df_full_historial.empty:
@@ -690,7 +605,7 @@ def obtener_datos_unicos(df_input):
     if df_input is None or df_input.empty:
         return df_input
     if 'OrdenExterna' not in df_input.columns:
-        # st.error("Columna 'OrdenExterna' no encontrada.") # Ocultado para no molestar
+        st.error("Columna 'OrdenExterna' no encontrada.")
         return pd.DataFrame(columns=df_input.columns)
     ts_col_valid = ('Timestamp_Procesado' in df_input.columns and
                     pd.api.types.is_datetime64_any_dtype(df_input['Timestamp_Procesado']) and
@@ -710,10 +625,12 @@ def formatear_para_display(df_input):
         return df_input
     df_display = df_input.copy()
     
+    # --- INICIO CAMBIO v2.7.3: Añadir 'fecha' ---
     columnas_fechas_a_procesar = [
         'Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Vence en', 
         'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento', 'fecha'
     ]
+    # --- FIN CAMBIO v2.7.3 ---
     
     columnas_fechas_presentes = df_display.columns.intersection(columnas_fechas_a_procesar)
     for col in columnas_fechas_presentes:
@@ -930,8 +847,6 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col.metric(label, value_to_display)
         else:
             col.metric(label, value_to_display)
-            
-    # --- INICIO CAMBIO v2.7.9: Añadir 'Reabiertos_Cerrados_Hoy' ---
     if page_key == "principal":
         col1, col2, col3, col4, col5 = st.columns(5)
         if st.session_state.user_role == "admin":
@@ -947,7 +862,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col7.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
             metric_with_critical(col8, "📤 Referidos", 'Referidos')
             metric_with_critical(col9, "📅 Citados", 'Citados')
-            metric_with_critical(col10, "✅ Reabiertos Cerrados", 'Reabiertos_Cerrados_Hoy') # <-- CAMBIADO
+            metric_with_critical(col10, "🔄 Rebote", 'Rebote')
         else: 
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
@@ -956,7 +871,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col5, "📤 Referidos", 'Referidos')
             col6, col7, col8, col9, col10 = st.columns(5)
             metric_with_critical(col6, "📅 Citados", 'Citados')
-            metric_with_critical(col7, "✅ Reabiertos Cerrados", 'Reabiertos_Cerrados_Hoy') # <-- CAMBIADO
+            metric_with_critical(col7, "🔄 Rebote", 'Rebote')
             metric_with_critical(col8, "🔄 Total Manejado", 'Manejados')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
@@ -974,7 +889,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
             metric_with_critical(col6, "📤 Referidos", 'Referidos')
             metric_with_critical(col7, "📅 Citados", 'Citados')
-            metric_with_critical(col8, "✅ Reabiertos Cerrados", 'Reabiertos_Cerrados_Hoy') # <-- CAMBIADO
+            metric_with_critical(col8, "🔄 Rebote", 'Rebote')
         else:
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
             metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
@@ -982,11 +897,10 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col4, "📤 Referidos", 'Referidos')
             col5, col6, col7, col8 = st.columns(4)
             metric_with_critical(col5, "📅 Citados", 'Citados')
-            metric_with_critical(col6, "✅ Reabiertos Cerrados", 'Reabiertos_Cerrados_Hoy') # <-- CAMBIADO
+            metric_with_critical(col6, "🔄 Rebote", 'Rebote')
             metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
-    # --- FIN CAMBIO v2.7.9 ---
 
 # ***** INICIO CAMBIO v2.7.7: Función 'display_detail_table' actualizada *****
 def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix, reabiertos_set):
@@ -999,7 +913,7 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
     
     # --- INICIO CAMBIO v2.7.7 ---
     # Añadir el checkbox de filtro
-    filtro_reabiertos = st.checkbox("🟡 Mostrar solo reabiertos (activos/iniciados)", key=f"check_reabiertos_{page_key}")
+    filtro_reabiertos = st.checkbox("🟡 Mostrar solo reabiertos", key=f"check_reabiertos_{page_key}")
     # --- FIN CAMBIO v2.7.7 ---
 
     # Prepara el dataframe para mostrar ANTES de buscar (para el botón de descarga)
@@ -1098,8 +1012,7 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
         df_grafico = df_page_data.copy()
         df_grafico['Fecha_Hora'] = df_grafico['Timestamp_Procesado'].dt.floor('H')
         def agg_kpis_por_hora(group):
-            # NOTA: Pasamos un set vacío de reabiertos aquí, ya que este KPI no es relevante por hora
-            kpis_group = calcular_kpis(group, df_full_historial, set()) 
+            kpis_group = calcular_kpis(group, df_full_historial) 
             return pd.Series(kpis_group)
         resumen_hora = df_grafico.groupby('Fecha_Hora').apply(agg_kpis_por_hora).reset_index()
         
@@ -1138,13 +1051,9 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
         st.error(f"Error al generar el gráfico de tendencia: {e}")
         st.error(traceback.format_exc())
 
-# ***** INICIO CAMBIO v2.7.9: 'render_dashboard_page' actualizada *****
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
 def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, critical_metric_key=None, dt_inicio=None, dt_fin=None):
-    
-    # --- CAMBIO v2.7.9: Mover cálculo de KPIs aquí ---
-    # Pasamos el set_casos_reabiertos a la función de KPIs
-    kpis = calcular_kpis(df_page_data, df_full_historial, reabiertos_set)
-    
     if df_page_data is None or df_page_data.empty:
         st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
         
@@ -1161,6 +1070,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
              )
         return
         
+    kpis = calcular_kpis(df_page_data, df_full_historial)
     if role == "admin":
         display_kpi_metrics(kpis, page_key, critical_metric_key)
         st.markdown("---")
@@ -1663,7 +1573,7 @@ if menu == "🏠 Principal":
             critical_metric_key='Pendientes' 
         )
     else: 
-        kpis_supervisor = calcular_kpis(df_unicos, df_full_historial, set_casos_reabiertos)
+        kpis_supervisor = calcular_kpis(df_unicos, df_full_historial)
         display_kpi_metrics(kpis_supervisor, page_key="principal", critical_metric_key='Pendientes')
         st.markdown("---")
         agrupar_por = 'Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Asignado_A'
@@ -2046,7 +1956,7 @@ elif menu == "📈 Rendimiento":
             reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
-# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.9 (CON LÓGICA CORREGIDA) ---
+# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.4 (CON FILTRO INDEPENDIENTE Y CORRECCIÓN DE ROL) ---
 elif menu == "🔄 Reabiertos":
     
     # 1. Título (ahora dinámico para el rol de supervisor)
@@ -2056,32 +1966,38 @@ elif menu == "🔄 Reabiertos":
         st.title(f"🔄 Análisis de Reabiertos")
 
     st.info("""
-    Esta página compara la tabla `reabiertos` (columna `caso`) contra la tabla `snapshot_hoy` (la lista actual de KUNAI).
+    Esta página compara la tabla `reabiertos` (columna `caso`) contra el historial de `historial_cambios` (columna `OrdenExterna`).
     
-    Muestra **solo** los casos de 'reabiertos' que actualmente se encuentran en estado **'activo'** o **'iniciado'** en KUNAI.
+    Muestra **solo** los casos de 'reabiertos' que actualmente se encuentran en estado **'activo'** o **'iniciado'** en KUNAI (de CUALQUIER fecha).
+    Los resultados se ordenan por la fecha más reciente del reporte de 'reabiertos'.
     """)
     
-    if df_snapshot_hoy is None or df_snapshot_hoy.empty or df_reabiertos_full is None or df_reabiertos_full.empty:
-        st.warning("No se pudieron cargar los datos de 'snapshot_hoy' o 'reabiertos' para el análisis.")
+    if df_full_historial is None or df_full_historial.empty or df_reabiertos_full is None or df_reabiertos_full.empty:
+        st.warning("No se pudieron cargar los datos de 'historial_cambios' o 'reabiertos' para el análisis.")
     else:
         
-        # 2. Obtener TODAS las coincidencias (LÓGICA CORREGIDA)
-        df_coincidencias_TODAS = analizar_reabiertos(df_reabiertos_full, df_snapshot_hoy)
+        # 2. Obtener TODAS las coincidencias
+        df_coincidencias_TODAS = analizar_reabiertos(df_full_historial, df_reabiertos_full)
 
         # 3. Pre-filtrar por ROL (Si es supervisor, solo ve lo suyo)
         df_coincidencias_ROL = df_coincidencias_TODAS.copy()
         
+        # ***** INICIO DE LA CORRECCIÓN v2.7.4 *****
         if st.session_state.user_role == "supervisor":
+            # Comparamos con 'tarjeta_supervisor' (minúscula)
             if 'tarjeta_supervisor' in df_coincidencias_ROL.columns: 
                 df_coincidencias_ROL = df_coincidencias_ROL[
                     df_coincidencias_ROL['tarjeta_supervisor'].astype(str) == str(st.session_state.supervisor_id)
                 ]
             else:
+                # Si la columna no existiera, se vacía para evitar mostrar datos incorrectos
                 st.warning("Columna 'tarjeta_supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará.")
                 df_coincidencias_ROL = df_coincidencias_ROL.iloc[0:0] 
-        
+        # ***** FIN DE LA CORRECCIÓN v2.7.4 *****
+
         # 4. Crear el NUEVO filtro de supervisor LOCAL (en la página)
         supervisor_options_reabiertos = ["Todos"]
+        # Usamos la columna 'supervisor' (nombres) para poblar el filtro
         if not df_coincidencias_ROL.empty and 'supervisor' in df_coincidencias_ROL.columns:
             supervisores_validos_reabiertos = sorted([str(s) for s in df_coincidencias_ROL['supervisor'].dropna().unique() if str(s).strip()])
             supervisor_options_reabiertos.extend(supervisores_validos_reabiertos)
@@ -2089,6 +2005,7 @@ elif menu == "🔄 Reabiertos":
         st.markdown("---")
         
         supervisor_sel_local = "Todos"
+        # El filtro solo aparece para roles que ven a más de una persona
         if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
             supervisor_sel_local = st.selectbox(
                 "Filtrar por Supervisor (solo en esta página):", 
@@ -2099,6 +2016,7 @@ elif menu == "🔄 Reabiertos":
         # 5. Aplicar el filtro LOCAL
         df_filtrada_final = df_coincidencias_ROL.copy()
         if supervisor_sel_local != "Todos":
+            # Filtramos por la columna 'supervisor' (nombre) porque el selectbox usa nombres
             if 'supervisor' in df_filtrada_final.columns:
                 df_filtrada_final = df_filtrada_final[
                     df_filtrada_final['supervisor'].astype(str) == str(supervisor_sel_local)
@@ -2108,39 +2026,25 @@ elif menu == "🔄 Reabiertos":
         
         # 6. Mostrar resultados
         if df_filtrada_final.empty:
+            # Mensaje personalizado si es un supervisor
             if st.session_state.user_role == "supervisor":
                 st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI (para el supervisor: {st.session_state.supervisor_id}).")
+            # Mensaje si el admin filtró y no encontró nada
             elif supervisor_sel_local != "Todos":
                 st.info(f"🎉 No se encontraron reabiertos activos para el supervisor '{supervisor_sel_local}'.")
+            # Mensaje general
             else:
                 st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI.")
         else:
+            st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_final))
             
-            # --- INICIO CAMBIO v2.7.7: Métricas de Estado ---
-            total_coincidencias = len(df_filtrada_final)
-            activos_count = 0
-            iniciados_count = 0
-            if 'Estado_KUNAI' in df_filtrada_final.columns:
-                activos_count = df_filtrada_final[df_filtrada_final['Estado_KUNAI'] == 'activo'].shape[0]
-                iniciados_count = df_filtrada_final[df_filtrada_final['Estado_KUNAI'] == 'iniciado'].shape[0]
-            
-            col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Total Coincidencias", total_coincidencias)
-            col_m2.metric("Estado 'Activo'", activos_count)
-            col_m3.metric("Estado 'Iniciado'", iniciados_count)
-            # --- FIN CAMBIO v2.7.7 ---
-
             # Formatear para mostrar
             df_display = formatear_para_display(df_filtrada_final)
             
-            # Reordenar columnas para mostrar el Estado_KUNAI
-            cols_reab = ['caso', 'codigo', 'tarjeta', 'supervisor', 'tarjeta_supervisor', 'fecha', 'condicion', 'Estado_KUNAI']
-            cols_reab_existentes = [c for c in cols_reab if c in df_display.columns]
-            
-            st.dataframe(df_display[cols_reab_existentes], use_container_width=True, hide_index=True)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
             
             # Botón de descarga
-            excel_data = to_excel(df_filtrada_final[cols_reab_existentes]) # Descarga solo las columnas mostradas
+            excel_data = to_excel(df_filtrada_final)
             if excel_data:
                 st.download_button(
                     label="📥 Descargar Coincidencias (Excel)",
@@ -2155,3 +2059,5 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
+
