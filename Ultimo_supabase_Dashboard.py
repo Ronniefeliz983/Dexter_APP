@@ -353,11 +353,11 @@ def calcular_kpis(df, df_full_historial, reabiertos_set):
     # --- NUEVA LÓGICA v2.7.9: Calcular Reabiertos Cerrados Hoy ---
     reabiertos_cerrados_hoy = 0
     if reabiertos_set and not df_kpi.empty:
-        # 1. Cuales de esta página son reabiertos?
+        # 1. Cuales de esta página son reabiertos? (Usamos el set_casos_reabiertos que ya está filtrado a solo activos/iniciados)
         casos_reabiertos_en_pagina = set(df_kpi['OrdenExterna'].astype(str)) & reabiertos_set
         
         if casos_reabiertos_en_pagina:
-            # 2. De esos reabiertos, ¿cuáles están cerrados?
+            # 2. De esos reabiertos, ¿cuáles están cerrados AHORA?
             df_reabiertos_pagina = df_kpi[df_kpi['OrdenExterna'].astype(str).isin(casos_reabiertos_en_pagina)]
             reabiertos_cerrados_hoy = df_reabiertos_pagina[df_reabiertos_pagina['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
     # --- FIN LÓGICA v2.7.9 ---
@@ -499,7 +499,9 @@ def denormalizar_columnas_desde_sql(df_sql):
         if col in df_csv.columns and col not in columnas_finales:
             columnas_finales.append(col)
             
-    return df_csv[columnas_finales]
+    # Filtrar para devolver solo las columnas que realmente existen
+    columnas_existentes = [col for col in columnas_finales if col in df_csv.columns]
+    return df_csv[columnas_existentes]
 
 
 @st.cache_data(ttl=60)
