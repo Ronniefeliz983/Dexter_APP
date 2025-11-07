@@ -22,7 +22,7 @@ import bcrypt
 # --------------------------
 # Configuración de la página
 # --------------------------
-st.set_page_config(page_title="Dashboard Trabajos S - v2.7.6", layout="wide") # <-- Versión actualizada
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.7", layout="wide") # <-- Versión actualizada
 
 # --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
 st.markdown("""
@@ -902,7 +902,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
 
-# ***** INICIO CAMBIO v2.7.6: Función 'display_detail_table' actualizada *****
+# ***** INICIO CAMBIO v2.7.7: Función 'display_detail_table' actualizada *****
 def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix, reabiertos_set):
     """
     Muestra la tabla de detalles, ahora con resaltado y filtro para reabiertos.
@@ -911,10 +911,10 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
     busqueda_key = f"buscar_{page_key}"
     texto_busqueda = st.text_input("🔍 Buscar en tabla", key=busqueda_key, placeholder="Buscar por Orden Externa, Cliente, Asignado...")
     
-    # --- INICIO CAMBIO v2.7.6 ---
+    # --- INICIO CAMBIO v2.7.7 ---
     # Añadir el checkbox de filtro
     filtro_reabiertos = st.checkbox("🟡 Mostrar solo reabiertos", key=f"check_reabiertos_{page_key}")
-    # --- FIN CAMBIO v2.7.6 ---
+    # --- FIN CAMBIO v2.7.7 ---
 
     # Prepara el dataframe para mostrar ANTES de buscar (para el botón de descarga)
     df_display_original = df_data_unicos_hoy.copy() if df_data_unicos_hoy is not None else pd.DataFrame()
@@ -935,18 +935,18 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
         # Si no hay búsqueda, el DataFrame es el original
         df_filtrado_por_texto = df_display_original
 
-    # --- INICIO CAMBIO v2.7.6: Aplicar el filtro de reabiertos ---
+    # --- INICIO CAMBIO v2.7.7: Aplicar el filtro de reabiertos ---
     if filtro_reabiertos:
         if 'OrdenExterna' in df_filtrado_por_texto.columns:
             # Filtra el dataframe (sea el original o el de búsqueda)
             df_filtrado_final = df_filtrado_por_texto[
                 df_filtrado_por_texto['OrdenExterna'].astype(str).isin(reabiertos_set)
-            ]
+            ].copy() # Usamos .copy() para evitar SettingWithCopyWarning
         else:
             df_filtrado_final = pd.DataFrame(columns=df_filtrado_por_texto.columns) # Empty df
     else:
-        df_filtrado_final = df_filtrado_por_texto
-    # --- FIN CAMBIO v2.7.6 ---
+        df_filtrado_final = df_filtrado_por_texto.copy() # Usamos .copy()
+    # --- FIN CAMBIO v2.7.7 ---
 
     # Función de estilo que se aplicará a cada fila
     def highlight_reabiertos(row):
@@ -972,17 +972,37 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
         # Mostrar un dataframe vacío si no hay resultados
         st.dataframe(df_display_final_formateado, use_container_width=True, hide_index=True)
 
-    # El botón de descarga siempre usa los datos originales de la vista (sin filtro de texto NI de reabiertos)
-    if not df_display_original.empty:
-        excel_data = to_excel(df_display_original) 
+    # --- INICIO CAMBIO v2.7.7: Lógica dinámica de descarga ---
+    
+    # 1. Determinar qué dataframe y nombre de archivo usar
+    if filtro_reabiertos:
+        # Si el filtro está activado, descargar solo los reabiertos (df_filtrado_final)
+        # Usamos df_filtrado_final (antes de formatear) para el excel
+        df_para_descargar = df_filtrado_final 
+        label_descarga = "📥 Descargar Reabiertos Filtrados (Excel)"
+        nombre_archivo = f"{file_name_prefix}_REABIERTOS_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        
+    else:
+        # Si el filtro está desactivado, descargar la vista completa (df_display_original)
+        df_para_descargar = df_display_original
+        label_descarga = "📥 Descargar Detalle (Vista Completa) como Excel"
+        nombre_archivo = f"{file_name_prefix}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+
+    # 2. Generar y mostrar el botón de descarga
+    # Solo mostrar el botón si el dataframe a descargar (sea cual sea) no está vacío
+    if not df_para_descargar.empty:
+        excel_data = to_excel(df_para_descargar) 
         if excel_data:
             st.download_button(
-                label="📥 Descargar Detalle (Vista Completa) como Excel",
+                label=label_descarga,
                 data=excel_data,
-                file_name=f"{file_name_prefix}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                file_name=nombre_archivo,
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                key=f"download_excel_{page_key}" # Añadir key para evitar conflictos
             )
-# ***** FIN CAMBIO v2.7.6 *****
+    
+    # --- FIN CAMBIO v2.7.7 ---
+# ***** FIN CAMBIO v2.7.7 *****
 
 
 def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly_trend_chart", dt_inicio=None, dt_fin=None):
