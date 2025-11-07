@@ -902,15 +902,20 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
 
-# ***** INICIO CAMBIO v2.7.5: Función 'display_detail_table' actualizada *****
+# ***** INICIO CAMBIO v2.7.6: Función 'display_detail_table' actualizada *****
 def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix, reabiertos_set):
     """
-    Muestra la tabla de detalles, ahora con resaltado para reabiertos.
+    Muestra la tabla de detalles, ahora con resaltado y filtro para reabiertos.
     'reabiertos_set' es un set de strings de 'caso'/'OrdenExterna' que están reabiertos.
     """
     busqueda_key = f"buscar_{page_key}"
     texto_busqueda = st.text_input("🔍 Buscar en tabla", key=busqueda_key, placeholder="Buscar por Orden Externa, Cliente, Asignado...")
     
+    # --- INICIO CAMBIO v2.7.6 ---
+    # Añadir el checkbox de filtro
+    filtro_reabiertos = st.checkbox("🟡 Mostrar solo reabiertos", key=f"check_reabiertos_{page_key}")
+    # --- FIN CAMBIO v2.7.6 ---
+
     # Prepara el dataframe para mostrar ANTES de buscar (para el botón de descarga)
     df_display_original = df_data_unicos_hoy.copy() if df_data_unicos_hoy is not None else pd.DataFrame()
 
@@ -922,53 +927,62 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
             supervisor_filter = global_supervisor_sel
         
         # Si hay búsqueda, el DataFrame se basa en el historial completo
-        df_display_filtrado = filtrar_dataframe_con_historial(
+        df_filtrado_por_texto = filtrar_dataframe_con_historial(
             df_full_historial, df_data_unicos_hoy, texto_busqueda, 
             supervisor_filter, status_filter
         )
     else:
         # Si no hay búsqueda, el DataFrame es el original
-        df_display_filtrado = df_display_original
+        df_filtrado_por_texto = df_display_original
+
+    # --- INICIO CAMBIO v2.7.6: Aplicar el filtro de reabiertos ---
+    if filtro_reabiertos:
+        if 'OrdenExterna' in df_filtrado_por_texto.columns:
+            # Filtra el dataframe (sea el original o el de búsqueda)
+            df_filtrado_final = df_filtrado_por_texto[
+                df_filtrado_por_texto['OrdenExterna'].astype(str).isin(reabiertos_set)
+            ]
+        else:
+            df_filtrado_final = pd.DataFrame(columns=df_filtrado_por_texto.columns) # Empty df
+    else:
+        df_filtrado_final = df_filtrado_por_texto
+    # --- FIN CAMBIO v2.7.6 ---
 
     # Función de estilo que se aplicará a cada fila
     def highlight_reabiertos(row):
-        # Usamos .get() para evitar errores si la columna no existe
         orden_externa = str(row.get('OrdenExterna', ''))
         
-        # Comprueba si la OrdenExterna está en el set de reabiertos
         if orden_externa in reabiertos_set:
-            # Devuelve el estilo para toda la fila
-            # ***** ¡CAMBIO DE COLOR A AMARILLO! *****
+            # Color amarillo
             return ['background-color: #fffacd; color: #5B4500;'] * len(row) 
         else:
-            # Sin estilo
             return [''] * len(row)
 
     # Formatea los datos para visualización (fechas, None, etc.)
-    df_display_final = formatear_para_display(df_display_filtrado)
+    df_display_final_formateado = formatear_para_display(df_filtrado_final)
 
-    if not df_display_final.empty:
+    if not df_display_final_formateado.empty:
         # Aplicar el estilo
         st.dataframe(
-            df_display_final.style.apply(highlight_reabiertos, axis=1), 
+            df_display_final_formateado.style.apply(highlight_reabiertos, axis=1), 
             use_container_width=True, 
             hide_index=True
         )
     else:
         # Mostrar un dataframe vacío si no hay resultados
-        st.dataframe(df_display_final, use_container_width=True, hide_index=True)
+        st.dataframe(df_display_final_formateado, use_container_width=True, hide_index=True)
 
-    # El botón de descarga siempre usa los datos originales de la vista (sin filtro de texto)
+    # El botón de descarga siempre usa los datos originales de la vista (sin filtro de texto NI de reabiertos)
     if not df_display_original.empty:
         excel_data = to_excel(df_display_original) 
         if excel_data:
             st.download_button(
-                label="📥 Descargar Detalle (Vista Actual) como Excel",
+                label="📥 Descargar Detalle (Vista Completa) como Excel",
                 data=excel_data,
                 file_name=f"{file_name_prefix}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
-# ***** FIN CAMBIO v2.7.5 *****
+# ***** FIN CAMBIO v2.7.6 *****
 
 
 def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly_trend_chart", dt_inicio=None, dt_fin=None):
@@ -1501,6 +1515,7 @@ if st.session_state.user_role == "supervisor": # Solo para este rol
     if not asignado_a_options:
         st.sidebar.info("No hay técnicos asignados para filtrar.")
     else:
+        # Hacemos que "Asignado A" sea un multiselect y seleccionamos todo por defecto
         asignado_sel = st.sidebar.multiselect("Asignado A", options=asignado_a_options, default=asignado_a_options)
 # ***** FIN CAMBIO v2.7.6 *****
 
