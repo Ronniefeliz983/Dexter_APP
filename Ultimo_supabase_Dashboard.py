@@ -806,8 +806,10 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
     }
     
     if es_puntualidad_page:
+        # --- ¡CORRECCIÓN 1! ---
         # En Puntualidad, 'Total' NO incluye 'Citados'
-        agg_dict_base['Total'] = ('Estado', lambda x: ~x.isin(estados_citados).sum())
+        # La lógica (~x.isin(...)).sum() cuenta los que NO son citados.
+        agg_dict_base['Total'] = ('Estado', lambda x: (~x.isin(estados_citados)).sum())
     else:
         # Comportamiento normal, 'Total' es todo
         agg_dict_base['Total'] = ('OrdenExterna', 'count')
@@ -819,11 +821,11 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
     # Calcular el resumen con TODOS los datos
     resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
 
-    # --- APLICAR AJUSTE DE PUNTUALIDAD (SI ES NECESARIO) ---
-    if es_puntualidad_page:
-        # Restar 'Citados' de 'Pendientes'
-        # (Porque 'Pendientes' incluye 'activos', 'iniciados' Y 'citados' por defecto)
-        resumen['Pendientes'] = resumen['Pendientes'] - resumen['Citados']
+    # --- ¡CORRECCIÓN 2! ---
+    # Ya no restamos 'Citados' de 'Pendientes', porque la agregación 
+    # de 'Pendientes' ya solo cuenta 'activo' e 'iniciado'.
+    # if es_puntualidad_page:
+    #     resumen['Pendientes'] = resumen['Pendientes'] - resumen['Citados']
     # --- FIN DE AJUSTE ---
 
     if es_pyme_page:
