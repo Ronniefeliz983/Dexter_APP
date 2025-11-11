@@ -391,8 +391,12 @@ def calcular_kpis(df, df_full_historial):
         # Asegurar que 'Vencido' es booleano (ya debería estarlo por cargar_datos)
         df_kpi['Vencido'] = df_kpi['Vencido'].fillna(False).astype(bool)
         
-        # 1. Contar Pymes Vencidas (en el dataframe actual)
-        pymes_vencidos = df_kpi[df_kpi['Vencido'] == True].shape[0]
+        # --- ¡ESTA ES LA LÍNEA CORREGIDA! ---
+        # 1. Contar Pymes Vencidas (Solo las que están PENDIENTES Y VENCIDAS)
+        pendientes_mask = df_kpi['Estado'].isin(['activo', 'iniciado'])
+        vencido_mask = df_kpi['Vencido'] == True
+        pymes_vencidos = df_kpi[pendientes_mask & vencido_mask].shape[0]
+        # --- FIN DE LA CORRECCIÓN ---
         
         # 2. Contar Pymes Cerradas en Tiempo
         cerrados_mask = df_kpi['Estado'].isin(['cerrado', 'validacion ext'])
