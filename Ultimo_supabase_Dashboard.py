@@ -34,7 +34,7 @@ st.markdown("""
         border-radius: 10px; /* Bordes redondeados */
         padding: 15px; /* Espacio interior (reducido para ser más compacto) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
-        height: 130px; /* <--- CAMBIO PARA ALTURA FIJA */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     [data-testid="stVerticalBlockBorderWrapper"] {
         background-color: #ffffff;
@@ -42,7 +42,7 @@ st.markdown("""
         border-radius: 10px;
         padding: 15px; /* Espacio interior (reducido) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-        height: 130px; /* <--- CAMBIO PARA ALTURA FIJA */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     [data-testid="stVerticalBlockBorderWrapper"] > div { border: none; }
 
@@ -831,7 +831,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col.markdown(f"""
             <div style="
                 background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px;
-                padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); height: 130px; /* <--- CAMBIO PARA ALTURA FIJA */
+                padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); min-height: 104px;
             ">
                 <div style="font-size: 0.875rem; margin-bottom: 8px; color: #31333F;">{label}</div>
                 <div style="font-size: 1.875rem; font-weight: 600; line-height: 1.2; color: #31333F;">
@@ -1062,11 +1062,11 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
              st.markdown("---")
              st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
              display_detail_table(
-                 df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
-                 role=role, role_supervisor_id=role_supervisor_id,
-                 global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
-                 page_key=page_key, file_name_prefix=page_key,
-                 reabiertos_set=reabiertos_set 
+                df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
+                role=role, role_supervisor_id=role_supervisor_id,
+                global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
+                page_key=page_key, file_name_prefix=page_key,
+                reabiertos_set=reabiertos_set 
              )
         return
         
@@ -2059,3 +2059,6 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
+
+
