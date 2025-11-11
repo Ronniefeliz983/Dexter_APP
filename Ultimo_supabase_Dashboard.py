@@ -34,7 +34,7 @@ st.markdown("""
         border-radius: 10px; /* Bordes redondeados */
         padding: 15px; /* Espacio interior (reducido para ser más compacto) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
-        height: 145px; /* <--- CAMBIO PARA ALTURA FIJA (145px) */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     [data-testid="stVerticalBlockBorderWrapper"] {
         background-color: #ffffff;
@@ -42,7 +42,7 @@ st.markdown("""
         border-radius: 10px;
         padding: 15px; /* Espacio interior (reducido) */
         box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-        height: 145px; /* <--- CAMBIO PARA ALTURA FIJA (145px) */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
     }
     [data-testid="stVerticalBlockBorderWrapper"] > div { border: none; }
 
@@ -490,7 +490,7 @@ def cargar_datos():
                         df[col] = df[col].dt.tz_localize('Etc/GMT+4', ambiguous='infer').dt.tz_localize(None)
             except Exception:
                 df[col] = df[col].dt.tz_localize(None)
-    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime6an_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
+    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
         mask_valid_oe = df['OE_Creacion'].notna()
         if mask_valid_oe.any():
             pyme_info = df.loc[mask_valid_oe, 'OE_Creacion'].apply(lambda x: pd.Series(calcular_pyme_y_vence(x), index=['PYME', 'Vence en']))
@@ -831,7 +831,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col.markdown(f"""
             <div style="
                 background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px;
-                padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); height: 145px; /* <--- CAMBIO PARA ALTURA FIJA (145px) */
+                padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); min-height: 104px;
             ">
                 <div style="font-size: 0.875rem; margin-bottom: 8px; color: #31333F;">{label}</div>
                 <div style="font-size: 1.875rem; font-weight: 600; line-height: 1.2; color: #31333F;">
@@ -1062,11 +1062,11 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
              st.markdown("---")
              st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
              display_detail_table(
-                 df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
-                 role=role, role_supervisor_id=role_supervisor_id,
-                 global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
-                 page_key=page_key, file_name_prefix=page_key,
-                 reabiertos_set=reabiertos_set 
+                df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
+                role=role, role_supervisor_id=role_supervisor_id,
+                global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
+                page_key=page_key, file_name_prefix=page_key,
+                reabiertos_set=reabiertos_set 
              )
         return
         
@@ -1891,7 +1891,7 @@ elif menu == "📅 Antiguas":
     with tab1:
         fecha_objetivo = hoy - timedelta(days=3)
         df_3_dias = pd.DataFrame()
-        if not df_unicos_antigad.empty:
+        if not df_unicos_antiguedad.empty:
             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
                 df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
         render_dashboard_page(
@@ -2059,3 +2059,6 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
+
+
