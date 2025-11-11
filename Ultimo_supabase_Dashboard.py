@@ -284,20 +284,44 @@ def calcular_pyme_y_vence(fecha_creacion):
 
 def calcular_vencido(row):
     vence_en_dt = pd.to_datetime(row.get('Vence en'), errors='coerce')
-    # estado = str(row.get('Estado','')).lower() # <-- No comprobamos el estado aquí
-
+    estado = str(row.get('Estado','')).lower()
+    
     # Si no tiene fecha de vencimiento, no puede estar vencido.
     if pd.isna(vence_en_dt):
         return False
-    
-    ahora_naive = get_current_ast_time()
+
+    # Convertir 'Vence en' a naive
     vence_en_naive = vence_en_dt.tz_convert(None) if hasattr(vence_en_dt, 'tzinfo') and vence_en_dt.tzinfo is not None else vence_en_dt.replace(tzinfo=None)
+
+    # --- INICIO DE LA LÓGICA CORREGIDA ---
     
-    try:
-        # La única lógica que importa: ¿Es la hora actual posterior a la hora de vencimiento?
-        return ahora_naive > vence_en_naive
-    except TypeError:
-        return False
+    # CASO 1: El ticket está PENDIENTE ('activo' o 'iniciado')
+    if estado in ['activo', 'iniciado']:
+        # Lógica dinámica: Comparamos con la hora actual
+        ahora_naive = get_current_ast_time()
+        try:
+            return ahora_naive > vence_en_naive
+        except TypeError:
+            return False
+    
+    # CASO 2: El ticket está CERRADO o en cualquier otro estado final
+    else:
+        # Lógica "congelada": Comparamos el timestamp del snapshot (cierre) con la hora de vencimiento
+        timestamp_evento = pd.to_datetime(row.get('Timestamp_Procesado'), errors='coerce')
+        
+        # Si no podemos saber cuándo se cerró, asumimos que no está vencido
+        if pd.isna(timestamp_evento):
+            return False
+            
+        # Convertir timestamp_evento a naive
+        evento_naive = timestamp_evento.tz_convert(None) if hasattr(timestamp_evento, 'tzinfo') and timestamp_evento.tzinfo is not None else timestamp_evento.replace(tzinfo=None)
+        
+        try:
+            # ¿Se detectó el cierre DESPUÉS de la hora de vencimiento?
+            return evento_naive > vence_en_naive
+        except TypeError:
+            return False
+    # --- FIN DE LA LÓGICA CORREGIDA ---
 
 @st.cache_data(ttl=300)
 def get_earliest_batch_initial_cohort(df_full_historial):
