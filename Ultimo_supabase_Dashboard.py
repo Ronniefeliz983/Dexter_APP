@@ -725,24 +725,55 @@ def aplicar_estilo_resumen_tecnico(row):
     return styles
 
 def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
-    cols = [agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']
+    # --- MODIFICADO: Añadidas nuevas columnas a la definición base ---
+    cols = [
+        agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+        'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
+        'Eficiencia_Total_%'
+    ]
+    
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
+    
     if agrupar_por not in df.columns or 'OrdenExterna' not in df.columns or 'Estado' not in df.columns:
         st.warning(f"Faltan columnas esenciales para crear el resumen.")
         return pd.DataFrame(columns=cols)
+        
     df_copy = df.copy()
     df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str)
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
+
+    # --- NUEVO: Pre-calcular métricas de vencimiento ---
+    has_vencido_col = 'Vencido' in df_copy.columns
+    
+    if has_vencido_col:
+        # Asegurar que Vencido es booleano
+        df_copy['Vencido'] = df_copy['Vencido'].fillna(False).astype(bool)
+        df_copy['Es_Vencido'] = df_copy['Vencido'] == True
+        df_copy['Es_Cerrado_Tiempo'] = df_copy['Estado'].isin(['cerrado', 'validacion ext']) & (df_copy['Vencido'] == False)
+    else:
+        # Crear columnas dummy si 'Vencido' no existe (ej. en otras páginas)
+        df_copy['Es_Vencido'] = False
+        df_copy['Es_Cerrado_Tiempo'] = False
+
+    # --- MODIFICADO: .agg() actualizado ---
     resumen = df_copy.groupby(agrupar_por).agg(
         Total=('OrdenExterna', 'count'),
         Cerrados=('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
         Referidos=('Estado', lambda x: (x == 'pend trab interno').sum()),
         Citados=('Estado', lambda x: x.isin(['pendiente de calendarizacion', 'calendarizado']).sum()),
         Rebote=('Estado', lambda x: (x == 'validacion int').sum()),
-        Pendientes=('Estado', lambda x: x.isin(['activo', 'iniciado']).sum())
+        Pendientes=('Estado', lambda x: x.isin(['activo', 'iniciado']).sum()),
+        # --- NUEVO: Agregar sumas de las columnas pre-calculadas ---
+        Vencidos=('Es_Vencido', 'sum'),
+        Cerrados_en_Tiempo=('Es_Cerrado_Tiempo', 'sum')
     ).reset_index()
+
+    # Renombrar la columna para el display
+    resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True)
+    
     resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote']
+    
     if logica_tecnico:
         cond_mas_de_7 = resumen['Total'] > 7
         divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
@@ -753,6 +784,7 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
         resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
                                             round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
                                             0.0)
+    
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         total_row[agrupar_por] = 'TOTAL'
@@ -763,10 +795,28 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
         total_row['Rebote'] = resumen['Rebote'].sum()
         total_row['Pendientes'] = resumen['Pendientes'].sum()
         total_row['Total Manejado'] = resumen['Total Manejado'].sum()
+        
+        # --- NUEVO: Sumar las nuevas columnas al TOTAL ---
+        total_row['Vencidos'] = resumen['Vencidos'].sum()
+        total_row['Cerrados en Tiempo'] = resumen['Cerrados en Tiempo'].sum()
+        
         total_manejado_general = total_row['Total Manejado']
         total_general = total_row['Total']
         total_row['Eficiencia_Total_%'] = round(total_manejado_general * 100 / total_general, 1) if total_general > 0 else 0.0
+        
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
+    
+    # --- NUEVO: Reordenar columnas para que las nuevas aparezcan donde queremos ---
+    column_order = [
+        agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+        'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
+        'Eficiencia_Total_%'
+    ]
+    
+    # Filtrar por columnas que realmente existen en el dataframe
+    final_columns_present = [col for col in column_order if col in resumen.columns]
+    resumen = resumen[final_columns_present]
+
     return resumen
 
 def filtrar_dataframe(df_input, texto_busqueda):
