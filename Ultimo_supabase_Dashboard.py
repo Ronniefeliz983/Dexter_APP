@@ -328,16 +328,20 @@ def get_earliest_batch_initial_cohort(df_full_historial):
         st.error(f"Error en get_earliest_batch_initial_cohort: {e}")
         return set()
 
+# ***** FUNCIÓN MODIFICADA *****
 def calcular_kpis(df, df_full_historial):
     default_kpis = {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
             'Rebote': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
-            'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0
+            'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0,
+            'Pymes_Vencidos': 0, 'Pymes_Cerrados_en_Tiempo': 0 # <-- Valores por defecto
         }
     if df is None or df.empty or 'Estado' not in df.columns or 'OrdenExterna' not in df.columns:
         return default_kpis
+    
     df_kpi = df.copy()
     df_kpi['Estado'] = df_kpi['Estado'].fillna('desconocido').astype(str).str.lower()
+    
     total = len(df_kpi)
     cerrados = df_kpi[df_kpi['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
     referidos = df_kpi[df_kpi['Estado'] == 'pend trab interno'].shape[0]
@@ -345,16 +349,21 @@ def calcular_kpis(df, df_full_historial):
     rebote = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0]
     pendientes = df_kpi[df_kpi['Estado'].isin(['activo', 'iniciado'])].shape[0]
     manejados = cerrados + referidos + citados + rebote
+    
     eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
+    
     total_iniciado_en_pagina = 0
     manejados_inicial_en_pagina = 0
     eficiencia_inicial = 0.0
+    
     global_initial_cohort_ids = get_earliest_batch_initial_cohort(df_full_historial)
+    
     if global_initial_cohort_ids:
         try:
             tickets_en_pagina_actual_ids = set(df_kpi['OrdenExterna'].unique())
             cohort_tickets_in_current_page_ids = global_initial_cohort_ids.intersection(tickets_en_pagina_actual_ids)
             total_iniciado_en_pagina = len(cohort_tickets_in_current_page_ids)
+            
             if total_iniciado_en_pagina > 0:
                 df_kpi_del_cohort_intersectado = df_kpi[df_kpi['OrdenExterna'].isin(cohort_tickets_in_current_page_ids)]
                 cerrados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
@@ -368,11 +377,32 @@ def calcular_kpis(df, df_full_historial):
             total_iniciado_en_pagina = 0
             manejados_inicial_en_pagina = 0
             eficiencia_inicial = 0.0
+
+    # --- ¡NUEVO! CÁLCULOS ESPECÍFICOS DE PYME ---
+    pymes_vencidos = 0
+    pymes_cerrados_en_tiempo = 0
+
+    if 'Vencido' in df_kpi.columns:
+        # Asegurar que 'Vencido' es booleano (ya debería estarlo por cargar_datos)
+        df_kpi['Vencido'] = df_kpi['Vencido'].fillna(False).astype(bool)
+        
+        # 1. Contar Pymes Vencidas (en el dataframe actual)
+        pymes_vencidos = df_kpi[df_kpi['Vencido'] == True].shape[0]
+        
+        # 2. Contar Pymes Cerradas en Tiempo
+        cerrados_mask = df_kpi['Estado'].isin(['cerrado', 'validacion ext'])
+        en_tiempo_mask = df_kpi['Vencido'] == False
+        pymes_cerrados_en_tiempo = df_kpi[cerrados_mask & en_tiempo_mask].shape[0]
+    # --- FIN DE NUEVOS CÁLCULOS ---
+
     return {
         'Total': total, 'Cerrados': cerrados, 'Referidos': referidos, 'Citados': citados,
         'Rebote': rebote, 'Pendientes': pendientes, 'Manejados': manejados,
         'Eficiencia_Total_%': eficiencia_total, 'Total_Iniciado': total_iniciado_en_pagina, 
-        'Manejados_Inicial': manejados_inicial_en_pagina, 'Eficiencia_Inicial': eficiencia_inicial 
+        'Manejados_Inicial': manejados_inicial_en_pagina, 'Eficiencia_Inicial': eficiencia_inicial,
+        # --- ¡NUEVAS KPIS AÑADIDAS AL RETORNO! ---
+        'Pymes_Vencidos': pymes_vencidos,
+        'Pymes_Cerrados_en_Tiempo': pymes_cerrados_en_tiempo
     }
 # --- End of KPI Calculation Function ---
 
@@ -822,11 +852,14 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 # FUNCIONES DE RENDERIZADO
 # ------------------------------------
+
+# ***** FUNCIÓN MODIFICADA *****
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
         value_to_display = kpis.get(key, 0)
         if not isinstance(value_to_display, (int, float)): 
             value_to_display = 0
+            
         if key == critical_metric_key and value_to_display > 0:
             col.markdown(f"""
             <div style="
@@ -847,6 +880,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col.metric(label, value_to_display)
         else:
             col.metric(label, value_to_display)
+
     if page_key == "principal":
         col1, col2, col3, col4, col5 = st.columns(5)
         if st.session_state.user_role == "admin":
@@ -855,6 +889,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            
             col6, col7, col8, col9, col10 = st.columns(5)
             eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
             col6.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
@@ -869,6 +904,7 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
             metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
             metric_with_critical(col5, "📤 Referidos", 'Referidos')
+            
             col6, col7, col8, col9, col10 = st.columns(5)
             metric_with_critical(col6, "📅 Citados", 'Citados')
             metric_with_critical(col7, "🔄 Rebote", 'Rebote')
@@ -877,7 +913,56 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
             eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
             col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+
+    # --- ¡NUEVO BLOQUE ESPECÍFICO PARA PYMES! ---
+    elif page_key == "pymes":
+        # Layout de 10 métricas (2 filas de 5)
+        
+        # --- FILA 1 ---
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        # (Lógica para Admin/Gerencia)
+        if st.session_state.user_role in ["admin", "gerencia"]:
+            metric_with_critical(col1, "📋 Total PYMEs", 'Total', delta_text=critical_delta_text)
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+            metric_with_critical(col3, "✅ Cerrados (Total)", 'Cerrados')
+            metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            
+            # --- FILA 2 ---
+            col6, col7, col8, col9, col10 = st.columns(5)
+            metric_with_critical(col6, "📤 Referidos", 'Referidos')
+            metric_with_critical(col7, "📅 Citados", 'Citados')
+            metric_with_critical(col8, "🔄 Rebote", 'Rebote')
+            
+            # --- ¡NUEVAS MÉTRICAS! ---
+            metric_with_critical(col9, "🏆 Cerrados en Tiempo", 'Pymes_Cerrados_en_Tiempo')
+            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos", critical_metric_key='Pymes_Vencidos')
+
+        # (Lógica para Supervisor)
+        else:
+            metric_with_critical(col1, "📋 Total PYMEs", 'Total', delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col3, "✅ Cerrados (Total)", 'Cerrados')
+            metric_with_critical(col4, "📤 Referidos", 'Referidos')
+            metric_with_critical(col5, "📅 Citados", 'Citados')
+
+            # --- FILA 2 ---
+            col6, col7, col8, col9, col10 = st.columns(5)
+            metric_with_critical(col6, "🔄 Rebote", 'Rebote')
+            metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+            
+            # --- ¡NUEVAS MÉTRICAS! ---
+            metric_with_critical(col9, "🏆 Cerrados en Tiempo", 'Pymes_Cerrados_en_Tiempo')
+            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos", critical_metric_key='Pymes_Vencidos')
+
+    # --- FIN DE BLOQUE PYMES ---
+
     else: 
+        # Esta es la lógica original para las OTRAS páginas (Puntualidad, Antiguas, etc.)
         col1, col2, col3, col4 = st.columns(4)
         if st.session_state.user_role == "admin":
             metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
@@ -1062,17 +1147,21 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
              st.markdown("---")
              st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
              display_detail_table(
-                df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
-                role=role, role_supervisor_id=role_supervisor_id,
-                global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
-                page_key=page_key, file_name_prefix=page_key,
-                reabiertos_set=reabiertos_set 
+                 df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
+                 role=role, role_supervisor_id=role_supervisor_id,
+                 global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
+                 page_key=page_key, file_name_prefix=page_key,
+                 reabiertos_set=reabiertos_set 
              )
         return
         
     kpis = calcular_kpis(df_page_data, df_full_historial)
+    
+    # --- ¡SE LLAMA A LA NUEVA FUNCIÓN DE KPI! ---
+    display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos" if page_key != "pymes" else "Vencidos")
+    
     if role == "admin":
-        display_kpi_metrics(kpis, page_key, critical_metric_key)
+        # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
         resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False)
@@ -1098,6 +1187,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     fig_total.update_traces(texttemplate='%{text}', textposition='outside')
                     fig_total.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title=None, yaxis_title="Total Tickets", coloraxis_showscale=False)
                     st.plotly_chart(fig_total, use_container_width=True, key=f"{page_key}_total_chart")
+                
                 if page_key != "pymes":
                     st.markdown("#### ⏳ Tickets Pendientes por Supervisor")
                     if 'Estado' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
@@ -1114,6 +1204,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         st.plotly_chart(fig_pendientes, use_container_width=True, key=f"{page_key}_pending_chart")
                     else:
                         st.info("No hay tickets pendientes ('activo' o 'iniciado') para mostrar.")
+
                 if page_key == "pymes":
                     st.markdown("#### ⚠️ PYMEs Vencidas por Supervisor")
                     if 'Vencido' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
@@ -1124,6 +1215,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                             vencidos_pymes_df = pd.DataFrame()
                     else:
                         vencidos_pymes_df = pd.DataFrame()
+                        
                     if not vencidos_pymes_df.empty:
                         resumen_vencidos = vencidos_pymes_df.groupby('Supervisor')['OrdenExterna'].count().reset_index()
                         resumen_vencidos.rename(columns={'OrdenExterna': 'PYMEs Vencidas'}, inplace=True)
@@ -1138,6 +1230,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
                     else:
                         st.info("No hay PYMEs vencidas para mostrar.")
+                
                 st.markdown("---")
                 st.markdown("#### 📋 Resumen Detallado por Supervisor")
                 st.dataframe(
@@ -1159,8 +1252,9 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                 st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
                 if not resumen_admin.empty:
                     st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
+    
     elif role == "gerencia":
-        display_kpi_metrics(kpis, page_key, critical_metric_key)
+        # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False)
@@ -1188,12 +1282,14 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("🗂️ Detalle de Tickets")
         # Pasa el set de reabiertos
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
-    else:
-        display_kpi_metrics(kpis, page_key, critical_metric_key)
+    
+    else: # Roles 'supervisor' y 'supervisor_old'
+        # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
         titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
         es_logica_tecnico = (agrupar_por == 'Asignado_A')
-        if page_key == "principal" or page_key != "principal":
+        
+        if page_key == "principal" or page_key != "principal": # Esta lógica parece redundante, pero la mantengo
             st.markdown("---")
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
@@ -1225,8 +1321,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
             else:
                 st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+        
         if page_key == "rendimiento":
             render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
+        
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
         # Pasa el set de reabiertos
@@ -1627,7 +1725,8 @@ elif menu == "📊 Análisis PYMEs":
         title_prefix="Análisis PYMEs", df_page_data=df_pymes, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes",
-        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        reabiertos_set=set_casos_reabiertos, # <-- PASANDO REABIERTOS
+        critical_metric_key='Pymes_Vencidos' # <-- Nueva métrica crítica para PYMEs
     )
 
 elif menu == "⏰ Puntualidad":
@@ -1856,11 +1955,13 @@ elif menu == "🔍 Tracking Ticket":
         elif not df_supervisor_unicos_MASTER.empty:
                 ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
                 tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
+        
         tickets_recientes = pd.DataFrame()
         if not tickets_recientes_base.empty and 'Timestamp_Procesado' in tickets_recientes_base.columns and pd.api.types.is_datetime64_any_dtype(tickets_recientes_base['Timestamp_Procesado']):
             tickets_recientes = tickets_recientes_base.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
         elif not tickets_recientes_base.empty:
             tickets_recientes = tickets_recientes_base.tail(10)
+            
         if not tickets_recientes.empty:
             tabla_recientes = []
             for _, ticket in tickets_recientes.iterrows():
@@ -2059,7 +2160,3 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
-
-
-
