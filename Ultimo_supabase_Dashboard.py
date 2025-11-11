@@ -757,14 +757,14 @@ def aplicar_estilo_resumen_tecnico(row):
         styles['Total Manejado'] = color_style
     return styles
 
-def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False):
+def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
     # --- MODIFICADO: Definición de columnas base ---
     cols_base = [
         agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
         'Pendientes', 'Total Manejado'
     ]
     
-    # --- NUEVO: Añadir columnas PYME solo si es la página de PYME ---
+    # --- Añadir columnas PYME solo si es la página de PYME ---
     if es_pyme_page:
         cols = cols_base + ['Cerrados en Tiempo', 'Vencidos', 'Eficiencia_Total_%']
     else:
@@ -782,45 +782,60 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
     df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str)
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
 
-    # --- NUEVO: Pre-calcular métricas de vencimiento (solo si es necesario) ---
+    # --- Lógica Pyme (sin cambios) ---
     if es_pyme_page and 'Vencido' in df_copy.columns:
         df_copy['Vencido'] = df_copy['Vencido'].fillna(False).astype(bool)
-        
-        # --- ¡LÓGICA CORREGIDA! ---
-        # 'Es_Vencido' (para la tabla) solo debe contar los que están PENDIENTES Y VENCIDOS
         pendientes_mask = df_copy['Estado'].isin(['activo', 'iniciado'])
         vencido_mask = df_copy['Vencido'] == True
-        df_copy['Es_Vencido'] = pendientes_mask & vencido_mask # <-- AHORA ES CORRECTO
-        
-        # 'Es_Cerrado_Tiempo' usa la lógica original (Cerrado Y NO Vencido en la DB)
+        df_copy['Es_Vencido'] = pendientes_mask & vencido_mask
         df_copy['Es_Cerrado_Tiempo'] = df_copy['Estado'].isin(['cerrado', 'validacion ext']) & (df_copy['Vencido'] == False)
-        # --- FIN CORRECCIÓN ---
     else:
-        # Crear columnas dummy si no es la página de PYME
         df_copy['Es_Vencido'] = False
         df_copy['Es_Cerrado_Tiempo'] = False
 
-    # --- MODIFICADO: .agg() ahora es dinámico ---
-    agg_dict = {
-        'Total': ('OrdenExterna', 'count'),
+    # --- ¡NUEVA LÓGICA DE PUNTUALIDAD! ---
+    estados_citados = ['pendiente de calendarizacion', 'calendarizado']
+    
+    # Pre-calcular las categorías
+    agg_dict_base = {
         'Cerrados': ('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
         'Referidos': ('Estado', lambda x: (x == 'pend trab interno').sum()),
-        'Citados': ('Estado', lambda x: x.isin(['pendiente de calendarizacion', 'calendarizado']).sum()),
+        'Citados': ('Estado', lambda x: x.isin(estados_citados).sum()),
         'Rebote': ('Estado', lambda x: (x == 'validacion int').sum()),
         'Pendientes': ('Estado', lambda x: x.isin(['activo', 'iniciado']).sum())
     }
     
+    if es_puntualidad_page:
+        # En Puntualidad, 'Total' NO incluye 'Citados'
+        agg_dict_base['Total'] = ('Estado', lambda x: ~x.isin(estados_citados).sum())
+    else:
+        # Comportamiento normal, 'Total' es todo
+        agg_dict_base['Total'] = ('OrdenExterna', 'count')
+
     if es_pyme_page:
-        agg_dict['Vencidos'] = ('Es_Vencido', 'sum')
-        agg_dict['Cerrados en Tiempo'] = ('Es_Cerrado_Tiempo', 'sum')
-        
-    resumen = df_copy.groupby(agrupar_por).agg(**agg_dict).reset_index()
+        agg_dict_base['Vencidos'] = ('Es_Vencido', 'sum')
+        agg_dict_base['Cerrados en Tiempo'] = ('Es_Cerrado_Tiempo', 'sum')
+
+    # Calcular el resumen con TODOS los datos
+    resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
+
+    # --- APLICAR AJUSTE DE PUNTUALIDAD (SI ES NECESARIO) ---
+    if es_puntualidad_page:
+        # Restar 'Citados' de 'Pendientes'
+        # (Porque 'Pendientes' incluye 'activos', 'iniciados' Y 'citados' por defecto)
+        resumen['Pendientes'] = resumen['Pendientes'] - resumen['Citados']
+    # --- FIN DE AJUSTE ---
 
     if es_pyme_page:
         resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True, errors='ignore')
     
-    resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote']
+    # ¡MODIFICADO! Total Manejado ahora EXCLUYE citados si es_puntualidad_page
+    if es_puntualidad_page:
+        resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Rebote']
+    else:
+        resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote'] # Comportamiento normal
     
+    # Lógica de eficiencia (se basa en los nuevos totales)
     if logica_tecnico:
         cond_mas_de_7 = resumen['Total'] > 7
         divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
@@ -832,6 +847,7 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
                                             round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
                                             0.0)
     
+    # Lógica de fila TOTAL
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         total_row[agrupar_por] = 'TOTAL'
@@ -841,20 +857,19 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
         total_row['Citados'] = resumen['Citados'].sum()
         total_row['Rebote'] = resumen['Rebote'].sum()
         total_row['Pendientes'] = resumen['Pendientes'].sum()
-        total_row['Total Manejado'] = resumen['Total Manejado'].sum()
+        total_row['Total Manejado'] = resumen['Total Manejado'].sum() # Ya está ajustado
         
-        # --- NUEVO: Sumar las nuevas columnas al TOTAL (solo si existen) ---
         if es_pyme_page:
             total_row['Vencidos'] = resumen['Vencidos'].sum()
             total_row['Cerrados en Tiempo'] = resumen['Cerrados en Tiempo'].sum()
         
         total_manejado_general = total_row['Total Manejado']
-        total_general = total_row['Total']
+        total_general = total_row['Total'] # Ya está ajustado
         total_row['Eficiencia_Total_%'] = round(total_manejado_general * 100 / total_general, 1) if total_general > 0 else 0.0
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
     
-    # --- NUEVO: Reordenar columnas ---
+    # Lógica de orden de columnas
     if es_pyme_page:
         column_order = [
             agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
@@ -1250,9 +1265,19 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
 # (Añadido 'reabiertos_set' al final)
 def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, critical_metric_key=None, dt_inicio=None, dt_fin=None, kpi_override=None):
     if df_page_data is None or df_page_data.empty:
+        # --- Lógica de anulación para KPIs en página de puntualidad si está vacía ---
+        if page_key == "puntualidad" and kpi_override is not None:
+             kpis = kpi_override
+             display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos")
+             st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
+             st.markdown("---")
+             st.subheader("👥 Resumen por Supervisor")
+             st.dataframe(pd.DataFrame(columns=[global_supervisor_sel, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']), use_container_width=True, hide_index=True)
+             return
+        # --- Fin de lógica de anulación ---
+        
         st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
         
-        # AUNQUE NO HAYA DATOS, MOSTRAR TABLA VACÍA CON BUSCADOR (PARA TRACKING)
         if page_key == "principal_sup" or page_key == "principal":
              st.markdown("---")
              st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
@@ -1267,26 +1292,23 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         
     kpis = calcular_kpis(df_page_data, df_full_historial)
     
-    # --- ¡NUEVO! Lógica de anulación de KPI ---
+    # --- Lógica de anulación de KPI (para Puntualidad) ---
     if kpi_override is not None:
         for key, value in kpi_override.items():
             if key in kpis:
                 kpis[key] = value
-    # --- FIN DE LA NUEVA LÓGICA ---
     
-    # --- ¡NUEVA LÍNEA! ---
     es_pyme_flag = (page_key == "pymes")
+    es_puntualidad_flag = (page_key == "puntualidad") # <-- ¡NUEVA LÍNEA!
     
-    # --- ¡SE LLAMA A LA NUEVA FUNCIÓN DE KPI! ---
     display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos" if page_key != "pymes" else "Vencidos")
     
     if role == "admin":
-        # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
         
-        # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
-        resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag)
+        # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
+        resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
         
         if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
             st.warning("No hay datos de supervisores para graficar con los filtros actuales.")
@@ -1330,10 +1352,13 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 
                 if page_key == "pymes":
                     st.markdown("#### ⚠️ PYMEs Vencidas por Supervisor")
+                    # (Lógica de Pymes sin cambios)
                     if 'Vencido' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
                         try:
                             df_page_data['Vencido'] = df_page_data['Vencido'].astype(bool)
-                            vencidos_pymes_df = df_page_data[df_page_data['Vencido'] == True]
+                            # Usamos la lógica correcta de la tabla: vencidos Y pendientes
+                            pendientes_mask = df_page_data['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+                            vencidos_pymes_df = df_page_data[(df_page_data['Vencido'] == True) & (pendientes_mask)]
                         except Exception as e:
                             vencidos_pymes_df = pd.DataFrame()
                     else:
@@ -1377,12 +1402,11 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                     st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
     
     elif role == "gerencia":
-        # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         
-        # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
-        resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag)
+        # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
+        resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
         
         st.dataframe(
             resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
@@ -1392,8 +1416,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
-            # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
-            resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag)
+            # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
+            resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
             
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
@@ -1408,22 +1432,20 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
         st.markdown("---")
         st.subheader("🗂️ Detalle de Tickets")
-        # Pasa el set de reabiertos
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
     
     else: # Roles 'supervisor' y 'supervisor_old'
-        # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
         titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
         es_logica_tecnico = (agrupar_por == 'Asignado_A')
         
-        if page_key == "principal" or page_key != "principal": # Esta lógica parece redundante, pero la mantengo
+        if page_key == "principal" or page_key != "principal": 
             st.markdown("---")
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
                 
-                # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
-                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag)
+                # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
+                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
                 
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
@@ -1458,7 +1480,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
-        # Pasa el set de reabiertos
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
 # --- End of Render Dashboard Function ---
 # ***** FIN CAMBIO v2.7.5 *****
@@ -1866,7 +1887,7 @@ elif menu == "⏰ Puntualidad":
     st.title(f"⏰ Análisis de Puntualidad General - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Mostrando tickets **nuevos de hoy** con vencimiento 'Hoy'.")
     hoy = pd.Timestamp.now().normalize()
-    df_puntuales = pd.DataFrame()
+    df_puntuales = pd.DataFrame() # Este es el dataframe COMPLETO (sin filtrar)
     if df_unicos is not None and not df_unicos.empty:
         if 'OE_Vencimiento' in df_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_unicos['OE_Vencimiento']):
             mask_fecha = df_unicos['OE_Vencimiento'].dt.normalize() == hoy
@@ -1874,18 +1895,12 @@ elif menu == "⏰ Puntualidad":
             mask_texto = oe_venc_orig_str.str.lower() == 'hoy'
             df_puntuales = df_unicos[mask_fecha | mask_texto].copy()
 
-    # --- ¡INICIO DE LA NUEVA LÓGICA! ---
+    # --- ¡LÓGICA MEJORADA! ---
     
     # 1. Definir los estados de "Citados"
     estados_citados = ['pendiente de calendarizacion', 'calendarizado']
     
-    # 2. Calcular el KPI de "Citados" del dataframe COMPLETO
-    kpi_override_dict = {}
-    if not df_puntuales.empty and 'Estado' in df_puntuales.columns:
-        citados_reales_count = df_puntuales[df_puntuales['Estado'].astype(str).isin(estados_citados)].shape[0]
-        kpi_override_dict = {'Citados': citados_reales_count}
-    
-    # 3. Crear el dataframe filtrado (EXCLUYENDO citados) para los OTROS cálculos
+    # 2. Crear el dataframe filtrado (EXCLUYENDO citados) solo para los KPIs
     df_puntuales_filtrado = pd.DataFrame()
     if not df_puntuales.empty and 'Estado' in df_puntuales.columns:
         df_puntuales_filtrado = df_puntuales[
@@ -1894,18 +1909,36 @@ elif menu == "⏰ Puntualidad":
     elif not df_puntuales.empty:
         df_puntuales_filtrado = df_puntuales.copy() # Fallback
 
-    # 4. Llamar al renderizador con el dataframe FILTRADO y el KPI de override
+    # 3. Calcular KPIs para ANULAR (override)
+    # Los KPIs de 'Total', 'Pendientes', 'Manejado', 'Eficiencia' se calculan con los datos FILTRADOS
+    kpis_filtrados = calcular_kpis(df_puntuales_filtrado, df_full_historial)
+    
+    # Los KPIs de 'Citados' (y otros) se calculan con los datos COMPLETOS
+    kpis_completos = calcular_kpis(df_puntuales, df_full_historial)
+    
+    # 4. Crear el diccionario de anulación
+    kpi_override_dict = {
+        'Total': kpis_filtrados.get('Total', 0),
+        'Pendientes': kpis_filtrados.get('Pendientes', 0),
+        'Manejados': kpis_filtrados.get('Manejados', 0),
+        'Eficiencia_Total_%': kpis_filtrados.get('Eficiencia_Total_%', 0.0),
+        # Tomar los citados del cálculo completo
+        'Citados': kpis_completos.get('Citados', 0) 
+    }
+
+    # 5. Llamar al renderizador con el dataframe COMPLETO (para la tabla)
+    #    y el diccionario de anulación (para los KPIs)
     render_dashboard_page(
         title_prefix="Puntualidad General", 
-        df_page_data=df_puntuales_filtrado, # <-- Usa datos filtrados
+        df_page_data=df_puntuales, # <-- ¡AQUÍ ESTÁ EL CAMBIO! (datos completos)
         df_full_historial=df_full_historial,
         role=st.session_state.user_role, 
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, 
         status_filter=estatus_sel, 
-        page_key="puntualidad",
+        page_key="puntualidad", # La flag se activará con esto
         reabiertos_set=set_casos_reabiertos,
-        kpi_override=kpi_override_dict # <-- ¡AQUÍ ESTÁ EL CAMBIO!
+        kpi_override=kpi_override_dict # <-- Anula los KPIs
     )
     # --- FIN DE LA NUEVA LÓGICA ---
 
