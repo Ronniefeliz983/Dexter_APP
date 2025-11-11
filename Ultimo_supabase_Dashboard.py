@@ -724,13 +724,19 @@ def aplicar_estilo_resumen_tecnico(row):
         styles['Total Manejado'] = color_style
     return styles
 
-def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
-    # --- MODIFICADO: Añadidas nuevas columnas a la definición base ---
-    cols = [
+def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False):
+    # --- MODIFICADO: Definición de columnas base ---
+    cols_base = [
         agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
-        'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
-        'Eficiencia_Total_%'
+        'Pendientes', 'Total Manejado'
     ]
+    
+    # --- NUEVO: Añadir columnas PYME solo si es la página de PYME ---
+    if es_pyme_page:
+        cols = cols_base + ['Cerrados en Tiempo', 'Vencidos', 'Eficiencia_Total_%']
+    else:
+        cols = cols_base + ['Eficiencia_Total_%']
+
     
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
@@ -743,34 +749,34 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
     df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str)
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
 
-    # --- NUEVO: Pre-calcular métricas de vencimiento ---
-    has_vencido_col = 'Vencido' in df_copy.columns
-    
-    if has_vencido_col:
-        # Asegurar que Vencido es booleano
+    # --- NUEVO: Pre-calcular métricas de vencimiento (solo si es necesario) ---
+    if es_pyme_page and 'Vencido' in df_copy.columns:
         df_copy['Vencido'] = df_copy['Vencido'].fillna(False).astype(bool)
         df_copy['Es_Vencido'] = df_copy['Vencido'] == True
         df_copy['Es_Cerrado_Tiempo'] = df_copy['Estado'].isin(['cerrado', 'validacion ext']) & (df_copy['Vencido'] == False)
     else:
-        # Crear columnas dummy si 'Vencido' no existe (ej. en otras páginas)
+        # Crear columnas dummy si no es la página de PYME
         df_copy['Es_Vencido'] = False
         df_copy['Es_Cerrado_Tiempo'] = False
 
-    # --- MODIFICADO: .agg() actualizado ---
-    resumen = df_copy.groupby(agrupar_por).agg(
-        Total=('OrdenExterna', 'count'),
-        Cerrados=('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
-        Referidos=('Estado', lambda x: (x == 'pend trab interno').sum()),
-        Citados=('Estado', lambda x: x.isin(['pendiente de calendarizacion', 'calendarizado']).sum()),
-        Rebote=('Estado', lambda x: (x == 'validacion int').sum()),
-        Pendientes=('Estado', lambda x: x.isin(['activo', 'iniciado']).sum()),
-        # --- NUEVO: Agregar sumas de las columnas pre-calculadas ---
-        Vencidos=('Es_Vencido', 'sum'),
-        Cerrados_en_Tiempo=('Es_Cerrado_Tiempo', 'sum')
-    ).reset_index()
+    # --- MODIFICADO: .agg() ahora es dinámico ---
+    agg_dict = {
+        'Total': ('OrdenExterna', 'count'),
+        'Cerrados': ('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
+        'Referidos': ('Estado', lambda x: (x == 'pend trab interno').sum()),
+        'Citados': ('Estado', lambda x: x.isin(['pendiente de calendarizacion', 'calendarizado']).sum()),
+        'Rebote': ('Estado', lambda x: (x == 'validacion int').sum()),
+        'Pendientes': ('Estado', lambda x: x.isin(['activo', 'iniciado']).sum())
+    }
+    
+    if es_pyme_page:
+        agg_dict['Vencidos'] = ('Es_Vencido', 'sum')
+        agg_dict['Cerrados en Tiempo'] = ('Es_Cerrado_Tiempo', 'sum')
+        
+    resumen = df_copy.groupby(agrupar_por).agg(**agg_dict).reset_index()
 
-    # Renombrar la columna para el display
-    resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True)
+    if es_pyme_page:
+        resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True, errors='ignore')
     
     resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote']
     
@@ -796,9 +802,10 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
         total_row['Pendientes'] = resumen['Pendientes'].sum()
         total_row['Total Manejado'] = resumen['Total Manejado'].sum()
         
-        # --- NUEVO: Sumar las nuevas columnas al TOTAL ---
-        total_row['Vencidos'] = resumen['Vencidos'].sum()
-        total_row['Cerrados en Tiempo'] = resumen['Cerrados en Tiempo'].sum()
+        # --- NUEVO: Sumar las nuevas columnas al TOTAL (solo si existen) ---
+        if es_pyme_page:
+            total_row['Vencidos'] = resumen['Vencidos'].sum()
+            total_row['Cerrados en Tiempo'] = resumen['Cerrados en Tiempo'].sum()
         
         total_manejado_general = total_row['Total Manejado']
         total_general = total_row['Total']
@@ -806,14 +813,19 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False):
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
     
-    # --- NUEVO: Reordenar columnas para que las nuevas aparezcan donde queremos ---
-    column_order = [
-        agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
-        'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
-        'Eficiencia_Total_%'
-    ]
+    # --- NUEVO: Reordenar columnas ---
+    if es_pyme_page:
+        column_order = [
+            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
+            'Eficiencia_Total_%'
+        ]
+    else:
+        column_order = [
+            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            'Pendientes', 'Total Manejado', 'Eficiencia_Total_%'
+        ]
     
-    # Filtrar por columnas que realmente existen en el dataframe
     final_columns_present = [col for col in column_order if col in resumen.columns]
     resumen = resumen[final_columns_present]
 
@@ -1212,6 +1224,9 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         
     kpis = calcular_kpis(df_page_data, df_full_historial)
     
+    # --- ¡NUEVA LÍNEA! ---
+    es_pyme_flag = (page_key == "pymes")
+    
     # --- ¡SE LLAMA A LA NUEVA FUNCIÓN DE KPI! ---
     display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos" if page_key != "pymes" else "Vencidos")
     
@@ -1219,7 +1234,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
-        resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False)
+        
+        # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
+        resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag)
+        
         if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
             st.warning("No hay datos de supervisores para graficar con los filtros actuales.")
         else:
@@ -1312,7 +1330,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         # display_kpi_metrics(kpis, page_key, critical_metric_key) # Movido arriba
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
-        resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False)
+        
+        # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
+        resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag)
+        
         st.dataframe(
             resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
             use_container_width=True, 
@@ -1321,7 +1342,9 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
-            resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A', logica_tecnico=True)
+            # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
+            resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag)
+            
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
             st.dataframe(
@@ -1348,7 +1371,10 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             st.markdown("---")
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
-                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico)
+                
+                # --- MODIFICADO: Añadido 'es_pyme_page=es_pyme_flag' ---
+                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag)
+                
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                     if es_logica_tecnico:
@@ -1384,9 +1410,6 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("📋 Detalle de Tickets")
         # Pasa el set de reabiertos
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
-# --- End of Render Dashboard Function ---
-# ***** FIN CAMBIO v2.7.5 *****
-
 
 # --- ¡NUEVO! FUNCIONES CRUD PARA LA BASE DE DATOS ---
 @st.cache_data(ttl=5)
@@ -1734,7 +1757,10 @@ if menu == "🏠 Principal":
         es_logica_tecnico = (agrupar_por == 'Asignado_A')
         st.subheader(f"👥 {titulo_resumen}")
         if agrupar_por in df_unicos.columns:
-            resumen = crear_resumen_admin(df_unicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico)
+            
+            # --- MODIFICADO: Añadido 'es_pyme_page=False' ---
+            resumen = crear_resumen_admin(df_unicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=False)
+            
             if not resumen.empty:
                 resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                 if es_logica_tecnico:
