@@ -284,7 +284,7 @@ def calcular_pyme_y_vence(fecha_creacion):
 
 def calcular_vencido(row):
     vence_en_dt = pd.to_datetime(row.get('Vence en'), errors='coerce')
-    # estado = str(row.get('Estado','')).lower() # <-- YA NO ES NECESARIO
+    # estado = str(row.get('Estado','')).lower() # <-- No comprobamos el estado aquí
 
     # Si no tiene fecha de vencimiento, no puede estar vencido.
     if pd.isna(vence_en_dt):
@@ -757,8 +757,16 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
     # --- NUEVO: Pre-calcular métricas de vencimiento (solo si es necesario) ---
     if es_pyme_page and 'Vencido' in df_copy.columns:
         df_copy['Vencido'] = df_copy['Vencido'].fillna(False).astype(bool)
-        df_copy['Es_Vencido'] = df_copy['Vencido'] == True
+        
+        # --- ¡LÓGICA CORREGIDA! ---
+        # 'Es_Vencido' (para la tabla) solo debe contar los que están PENDIENTES Y VENCIDOS
+        pendientes_mask = df_copy['Estado'].isin(['activo', 'iniciado'])
+        vencido_mask = df_copy['Vencido'] == True
+        df_copy['Es_Vencido'] = pendientes_mask & vencido_mask # <-- AHORA ES CORRECTO
+        
+        # 'Es_Cerrado_Tiempo' usa la lógica original (Cerrado Y NO Vencido en la DB)
         df_copy['Es_Cerrado_Tiempo'] = df_copy['Estado'].isin(['cerrado', 'validacion ext']) & (df_copy['Vencido'] == False)
+        # --- FIN CORRECCIÓN ---
     else:
         # Crear columnas dummy si no es la página de PYME
         df_copy['Es_Vencido'] = False
