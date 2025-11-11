@@ -854,6 +854,9 @@ def calcular_tiempo_transcurrido(fecha_inicio):
 # ------------------------------------
 
 # ***** FUNCIÓN MODIFICADA *****
+# ------------------------------------
+# FUNCIONES DE RENDERIZADO
+# ------------------------------------
 def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
     def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
         value_to_display = kpis.get(key, 0)
@@ -938,7 +941,8 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             
             # --- ¡NUEVAS MÉTRICAS! ---
             metric_with_critical(col9, "🏆 Cerrados en Tiempo", 'Pymes_Cerrados_en_Tiempo')
-            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos", critical_metric_key='Pymes_Vencidos')
+            # ***** LÍNEA CORREGIDA *****
+            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos")
 
         # (Lógica para Supervisor)
         else:
@@ -957,7 +961,8 @@ def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta
             
             # --- ¡NUEVAS MÉTRICAS! ---
             metric_with_critical(col9, "🏆 Cerrados en Tiempo", 'Pymes_Cerrados_en_Tiempo')
-            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos", critical_metric_key='Pymes_Vencidos')
+            # ***** LÍNEA CORREGIDA (esta es la que reportó el traceback) *****
+            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos")
 
     # --- FIN DE BLOQUE PYMES ---
 
@@ -2160,3 +2165,4 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
