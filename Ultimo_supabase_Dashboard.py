@@ -1838,12 +1838,37 @@ elif menu == "⏰ Puntualidad":
             oe_venc_orig_str = df_unicos.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str)
             mask_texto = oe_venc_orig_str.str.lower() == 'hoy'
             df_puntuales = df_unicos[mask_fecha | mask_texto].copy()
+
+    # --- ¡INICIO DE LA NUEVA LÓGICA! ---
+    
+    # 1. Definir los estados de "Citados" que queremos excluir
+    estados_citados = ['pendiente de calendarizacion', 'calendarizado']
+    
+    # 2. Crear el dataframe filtrado, excluyendo los tickets "Citados"
+    df_puntuales_filtrado = pd.DataFrame()
+    if not df_puntuales.empty and 'Estado' in df_puntuales.columns:
+        df_puntuales_filtrado = df_puntuales[
+            ~df_puntuales['Estado'].astype(str).isin(estados_citados)
+        ].copy()
+    elif not df_puntuales.empty:
+         # Si no hay columna 'Estado', simplemente usa el dataframe original (caso borde)
+        df_puntuales_filtrado = df_puntuales.copy()
+
+    # 3. Llamar al renderizador de la página con el DATAFRAME FILTRADO
+    #    Esto recalculará automáticamente TODOS los KPIs y tablas de resumen
+    #    basándose en los datos sin los "Citados".
     render_dashboard_page(
-        title_prefix="Puntualidad General", df_page_data=df_puntuales, df_full_historial=df_full_historial,
-        role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
-        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="puntualidad",
-        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        title_prefix="Puntualidad General", 
+        df_page_data=df_puntuales_filtrado, # <-- ¡AQUÍ ESTÁ EL CAMBIO!
+        df_full_historial=df_full_historial,
+        role=st.session_state.user_role, 
+        role_supervisor_id=st.session_state.supervisor_id,
+        global_supervisor_sel=supervisor_sel, 
+        status_filter=estatus_sel, 
+        page_key="puntualidad",
+        reabiertos_set=set_casos_reabiertos 
     )
+    # --- FIN DE LA NUEVA LÓGICA ---
 
 elif menu == "🎯 Citas Puntuales":
     st.title(f"🎯 Análisis de Citas Puntuales - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
