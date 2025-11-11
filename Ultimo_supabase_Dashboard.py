@@ -1222,7 +1222,9 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
 
 # ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
 # (Añadido 'reabiertos_set' al final)
-def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, critical_metric_key=None, dt_inicio=None, dt_fin=None):
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
+def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, critical_metric_key=None, dt_inicio=None, dt_fin=None, kpi_override=None):
     if df_page_data is None or df_page_data.empty:
         st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
         
@@ -1240,6 +1242,13 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         return
         
     kpis = calcular_kpis(df_page_data, df_full_historial)
+    
+    # --- ¡NUEVO! Lógica de anulación de KPI ---
+    if kpi_override is not None:
+        for key, value in kpi_override.items():
+            if key in kpis:
+                kpis[key] = value
+    # --- FIN DE LA NUEVA LÓGICA ---
     
     # --- ¡NUEVA LÍNEA! ---
     es_pyme_flag = (page_key == "pymes")
@@ -1427,6 +1436,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("📋 Detalle de Tickets")
         # Pasa el set de reabiertos
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
+# --- End of Render Dashboard Function ---
+# ***** FIN CAMBIO v2.7.5 *****
 
 # --- ¡NUEVO! FUNCIONES CRUD PARA LA BASE DE DATOS ---
 @st.cache_data(ttl=5)
@@ -1841,32 +1852,36 @@ elif menu == "⏰ Puntualidad":
 
     # --- ¡INICIO DE LA NUEVA LÓGICA! ---
     
-    # 1. Definir los estados de "Citados" que queremos excluir
+    # 1. Definir los estados de "Citados"
     estados_citados = ['pendiente de calendarizacion', 'calendarizado']
     
-    # 2. Crear el dataframe filtrado, excluyendo los tickets "Citados"
+    # 2. Calcular el KPI de "Citados" del dataframe COMPLETO
+    kpi_override_dict = {}
+    if not df_puntuales.empty and 'Estado' in df_puntuales.columns:
+        citados_reales_count = df_puntuales[df_puntuales['Estado'].astype(str).isin(estados_citados)].shape[0]
+        kpi_override_dict = {'Citados': citados_reales_count}
+    
+    # 3. Crear el dataframe filtrado (EXCLUYENDO citados) para los OTROS cálculos
     df_puntuales_filtrado = pd.DataFrame()
     if not df_puntuales.empty and 'Estado' in df_puntuales.columns:
         df_puntuales_filtrado = df_puntuales[
             ~df_puntuales['Estado'].astype(str).isin(estados_citados)
         ].copy()
     elif not df_puntuales.empty:
-         # Si no hay columna 'Estado', simplemente usa el dataframe original (caso borde)
-        df_puntuales_filtrado = df_puntuales.copy()
+        df_puntuales_filtrado = df_puntuales.copy() # Fallback
 
-    # 3. Llamar al renderizador de la página con el DATAFRAME FILTRADO
-    #    Esto recalculará automáticamente TODOS los KPIs y tablas de resumen
-    #    basándose en los datos sin los "Citados".
+    # 4. Llamar al renderizador con el dataframe FILTRADO y el KPI de override
     render_dashboard_page(
         title_prefix="Puntualidad General", 
-        df_page_data=df_puntuales_filtrado, # <-- ¡AQUÍ ESTÁ EL CAMBIO!
+        df_page_data=df_puntuales_filtrado, # <-- Usa datos filtrados
         df_full_historial=df_full_historial,
         role=st.session_state.user_role, 
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, 
         status_filter=estatus_sel, 
         page_key="puntualidad",
-        reabiertos_set=set_casos_reabiertos 
+        reabiertos_set=set_casos_reabiertos,
+        kpi_override=kpi_override_dict # <-- ¡AQUÍ ESTÁ EL CAMBIO!
     )
     # --- FIN DE LA NUEVA LÓGICA ---
 
