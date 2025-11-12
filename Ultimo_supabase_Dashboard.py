@@ -1850,7 +1850,15 @@ else:
     supervisor_sel = st.session_state.supervisor_id
 estatus_sel = st.sidebar.multiselect("Estado", options=estado_options, default=estado_options)
 
-
+# --- ¡NUEVO! Botón de Refresh Manual ---
+if st.session_state.user_role in ["admin", "supervisor_old"]:
+    st.sidebar.markdown("---") # Separador visual
+    if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
+        # Limpia la caché de TODAS las funciones @st.cache_data
+        st.cache_data.clear()   
+        # Vuelve a ejecutar el script inmediatamente
+        st.rerun()
+# --- FIN DEL NUEVO BLOQUE ---
 # --- DataFrames Filtrados (Basados en 'df' - solo NUEVOS HOY) ---
 df_supervisor_unicos = df_unicos_base.copy() if df_unicos_base is not None else pd.DataFrame()
 if not df_supervisor_unicos.empty:
