@@ -799,6 +799,7 @@ def aplicar_estilo_resumen_tecnico(row):
 
 # --- ¡FUNCIÓN MODIFICADA! ---
 # --- ¡FUNCIÓN MODIFICADA! ---
+# --- ¡FUNCIÓN MODIFICADA! ---
 def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
     # --- MODIFICADO: Definición de columnas base (sin 'nombre' todavía) ---
     cols_base = [
@@ -918,13 +919,19 @@ def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecn
                                                round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
                                                0.0)
     
-    # Lógica de fila TOTAL
+    # --- ¡LÓGICA DE FILA TOTAL MODIFICADA! ---
     if not resumen.empty:
         total_row = pd.Series(name='Total')
-        total_row[agrupar_por] = 'TOTAL'
         
-        # --- ¡BLOQUE DE 'nombre' ELIMINADO! ---
-        # Ya no es necesaria la columna 'nombre'
+        # --- ¡NUEVO! Conteo de filas (Técnicos/Supervisores) ---
+        num_filas = len(resumen) # Contamos las filas ANTES de añadir el total
+        if logica_tecnico: # Esta variable ya se pasa a la función
+            total_row[agrupar_por] = f"TOTAL ({num_filas} Técnicos)"
+        elif agrupar_por == 'Supervisor':
+             total_row[agrupar_por] = f"TOTAL ({num_filas} Supervisores)"
+        else:
+             total_row[agrupar_por] = 'TOTAL'
+        # --- FIN DE LA MODIFICACIÓN ---
         
         total_row['Total'] = resumen['Total'].sum()
         total_row['Cerrados'] = resumen['Cerrados'].sum()
