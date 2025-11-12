@@ -621,12 +621,52 @@ def cargar_datos_reabiertos():
         return pd.DataFrame()
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
+# --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE SUPERVISOR ---
+@st.cache_data(ttl=3600) # Cache de 1 hora, los nombres no cambian mucho
+def cargar_head_count_supervisor():
+    """Carga la tabla 'head_count_supervisor' de Supabase."""
+    engine = get_database_engine()
+    if engine is None:
+        st.error("No hay conexión a la base de datos.")
+        return pd.DataFrame()
+    try:
+        query = text("SELECT * FROM head_count_supervisor")
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        
+        if df_sql.empty:
+            st.warning("La tabla 'head_count_supervisor' está vacía o no existe.")
+            return pd.DataFrame()
+        
+        # Normalizar la columna 'Tarjeta' para el merge
+        if 'tarjeta' in df_sql.columns:
+            # Aseguramos que sea string y minúscula, igual que la columna Supervisor
+            df_sql['tarjeta'] = df_sql['tarjeta'].astype(str).str.strip().str.lower()
+        else:
+            st.error("La tabla 'head_count_supervisor' no tiene la columna 'Tarjeta'.")
+            return pd.DataFrame()
+            
+        if 'nombre' not in df_sql.columns:
+            st.error("La tabla 'head_count_supervisor' no tiene la columna 'nombre'.")
+            return pd.DataFrame()
+
+        # Devolvemos solo las columnas necesarias
+        return df_sql[['tarjeta', 'nombre']]
+    except Exception as e:
+        # Si la tabla no existe, devolvemos un DF vacío pero no paramos el script
+        if "does not exist" in str(e).lower():
+             st.warning("La tabla 'head_count_supervisor' no existe. No se mostrarán los nombres.")
+             return pd.DataFrame()
+        st.error(f"❌ Error al cargar datos desde 'head_count_supervisor': {e}")
+        return pd.DataFrame()
+# --- FIN DE LA NUEVA FUNCIÓN ---
 
 # ==============================================================================
 # --- LÓGICA PRINCIPAL (v2.7.1) ---
 # ==============================================================================
 df_full_historial = cargar_datos()
-df_reabiertos_full = cargar_datos_reabiertos() # <-- NUEVA LÍNEA v2.7.3
+df_reabiertos_full = cargar_datos_reabiertos()
+df_head_count = cargar_head_count_supervisor() # <-- NUEVA LÍNEA v2.7.3
 
 # ***** INICIO CAMBIO v2.7.5: Crear set de reabiertos para resaltar *****
 if df_reabiertos_full is not None and not df_reabiertos_full.empty and 'caso' in df_reabiertos_full.columns:
@@ -757,8 +797,9 @@ def aplicar_estilo_resumen_tecnico(row):
         styles['Total Manejado'] = color_style
     return styles
 
-def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
-    # --- MODIFICADO: Definición de columnas base ---
+# --- ¡FUNCIÓN MODIFICADA! ---
+def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
+    # --- MODIFICADO: Definición de columnas base (sin 'nombre' todavía) ---
     cols_base = [
         agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
         'Pendientes', 'Total Manejado'
@@ -772,14 +813,20 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
 
     
     if df is None or df.empty:
+        # ¡NUEVO! Añadir 'nombre' a las columnas vacías si aplica
+        if agrupar_por == 'Supervisor':
+             cols.insert(1, 'nombre')
         return pd.DataFrame(columns=cols)
     
     if agrupar_por not in df.columns or 'OrdenExterna' not in df.columns or 'Estado' not in df.columns:
         st.warning(f"Faltan columnas esenciales para crear el resumen.")
+        if agrupar_por == 'Supervisor':
+             cols.insert(1, 'nombre')
         return pd.DataFrame(columns=cols)
         
     df_copy = df.copy()
-    df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str)
+    # ¡NUEVO! Normalizar también la columna de agrupación para el merge
+    df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str).str.lower()
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
 
     # --- Lógica Pyme (sin cambios) ---
@@ -793,7 +840,7 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
         df_copy['Es_Vencido'] = False
         df_copy['Es_Cerrado_Tiempo'] = False
 
-    # --- ¡NUEVA LÓGICA DE PUNTUALIDAD! ---
+    # --- Lógica de Puntualidad (sin cambios) ---
     estados_citados = ['pendiente de calendarizacion', 'calendarizado']
     
     # Pre-calcular las categorías
@@ -806,12 +853,8 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
     }
     
     if es_puntualidad_page:
-        # --- ¡CORRECCIÓN 1! ---
-        # En Puntualidad, 'Total' NO incluye 'Citados'
-        # La lógica (~x.isin(...)).sum() cuenta los que NO son citados.
         agg_dict_base['Total'] = ('Estado', lambda x: (~x.isin(estados_citados)).sum())
     else:
-        # Comportamiento normal, 'Total' es todo
         agg_dict_base['Total'] = ('OrdenExterna', 'count')
 
     if es_pyme_page:
@@ -821,69 +864,89 @@ def crear_resumen_admin(df, agrupar_por='Supervisor', logica_tecnico=False, es_p
     # Calcular el resumen con TODOS los datos
     resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
 
-    # --- ¡CORRECCIÓN 2! ---
-    # Ya no restamos 'Citados' de 'Pendientes', porque la agregación 
-    # de 'Pendientes' ya solo cuenta 'activo' e 'iniciado'.
-    # if es_puntualidad_page:
-    #     resumen['Pendientes'] = resumen['Pendientes'] - resumen['Citados']
-    # --- FIN DE AJUSTE ---
+    # --- ¡NUEVO! AÑADIR NOMBRES DE SUPERVISOR (MERGE) ---
+    if agrupar_por == 'Supervisor' and df_head_count is not None and not df_head_count.empty:
+        try:
+            # Aseguramos que la clave de merge en 'resumen' también esté normalizada
+            resumen[agrupar_por] = resumen[agrupar_por].astype(str).str.lower()
+            
+            resumen = pd.merge(
+                resumen,
+                df_head_count, # Esta tabla ya tiene 'Tarjeta' normalizada desde la carga
+                left_on='Supervisor', # Columna en 'resumen'
+                right_on='tarjeta',   # Columna en 'df_head_count'
+                how='left'
+            )
+            resumen.drop(columns=['tarjeta'], inplace=True, errors='ignore')
+            resumen['nombre'] = resumen['nombre'].fillna('Nombre no encontrado')
+        except Exception as e:
+            st.warning(f"No se pudo hacer merge con nombres de supervisor: {e}")
+            resumen['nombre'] = 'Error'
+    elif agrupar_por == 'Supervisor':
+        # Si la tabla de head_count está vacía o falló, al menos crear la columna
+        resumen['nombre'] = 'N/A'
+    # --- FIN DE AÑADIR NOMBRES ---
 
+    # --- Lógica de 'Total Manejado' y 'Eficiencia' (sin cambios) ---
     if es_pyme_page:
         resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True, errors='ignore')
     
-    # ¡MODIFICADO! Total Manejado ahora EXCLUYE citados si es_puntualidad_page
     if es_puntualidad_page:
         resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Rebote']
     else:
-        resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote'] # Comportamiento normal
+        resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote']
     
-    # Lógica de eficiencia (se basa en los nuevos totales)
     if logica_tecnico:
         cond_mas_de_7 = resumen['Total'] > 7
         divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
         resumen['Eficiencia_Total_%'] = np.where(divisor > 0,
-                                            round(resumen['Total Manejado'] * 100 / divisor, 1),
-                                            0.0)
+                                               round(resumen['Total Manejado'] * 100 / divisor, 1),
+                                               0.0)
     else:
         resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
-                                            round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
-                                            0.0)
+                                               round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+                                               0.0)
     
     # Lógica de fila TOTAL
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         total_row[agrupar_por] = 'TOTAL'
+        # ¡NUEVO! Añadir celda vacía para el nombre en la fila TOTAL
+        if 'nombre' in resumen.columns:
+            total_row['nombre'] = ''
+            
         total_row['Total'] = resumen['Total'].sum()
         total_row['Cerrados'] = resumen['Cerrados'].sum()
         total_row['Referidos'] = resumen['Referidos'].sum()
         total_row['Citados'] = resumen['Citados'].sum()
         total_row['Rebote'] = resumen['Rebote'].sum()
         total_row['Pendientes'] = resumen['Pendientes'].sum()
-        total_row['Total Manejado'] = resumen['Total Manejado'].sum() # Ya está ajustado
+        total_row['Total Manejado'] = resumen['Total Manejado'].sum()
         
         if es_pyme_page:
             total_row['Vencidos'] = resumen['Vencidos'].sum()
             total_row['Cerrados en Tiempo'] = resumen['Cerrados en Tiempo'].sum()
         
         total_manejado_general = total_row['Total Manejado']
-        total_general = total_row['Total'] # Ya está ajustado
+        total_general = total_row['Total']
         total_row['Eficiencia_Total_%'] = round(total_manejado_general * 100 / total_general, 1) if total_general > 0 else 0.0
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
     
-    # Lógica de orden de columnas
+    # ¡MODIFICADO! Lógica de orden de columnas (añadir 'nombre')
     if es_pyme_page:
         column_order = [
-            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            agrupar_por, 'nombre', 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
             'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
             'Eficiencia_Total_%'
         ]
     else:
         column_order = [
-            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            agrupar_por, 'nombre', 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
             'Pendientes', 'Total Manejado', 'Eficiencia_Total_%'
         ]
     
+    # Esta línea se encarga de ignorar 'nombre' si no existe (ej. al agrupar por Técnico)
     final_columns_present = [col for col in column_order if col in resumen.columns]
     resumen = resumen[final_columns_present]
 
@@ -1265,31 +1328,37 @@ def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly
 # (Añadido 'reabiertos_set' al final)
 # ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
 # (Añadido 'reabiertos_set' al final)
-def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, critical_metric_key=None, dt_inicio=None, dt_fin=None, kpi_override=None):
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
+# --- ¡FUNCIÓN MODIFICADA! ---
+# (Añadido 'df_head_count' al final de los argumentos)
+def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, df_head_count, critical_metric_key=None, dt_inicio=None, dt_fin=None, kpi_override=None):
     if df_page_data is None or df_page_data.empty:
         # --- Lógica de anulación para KPIs en página de puntualidad si está vacía ---
         if page_key == "puntualidad" and kpi_override is not None:
-             kpis = kpi_override
-             display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos")
-             st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
-             st.markdown("---")
-             st.subheader("👥 Resumen por Supervisor")
-             st.dataframe(pd.DataFrame(columns=[global_supervisor_sel, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']), use_container_width=True, hide_index=True)
-             return
+                kpis = kpi_override
+                display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos")
+                st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
+                st.markdown("---")
+                st.subheader("👥 Resumen por Supervisor")
+                # ¡NUEVO! Añadir 'nombre' a las columnas vacías
+                columnas_vacias = [global_supervisor_sel, 'nombre', 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']
+                st.dataframe(pd.DataFrame(columns=columnas_vacias), use_container_width=True, hide_index=True)
+                return
         # --- Fin de lógica de anulación ---
         
         st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
         
         if page_key == "principal_sup" or page_key == "principal":
-             st.markdown("---")
-             st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
-             display_detail_table(
-                 df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
-                 role=role, role_supervisor_id=role_supervisor_id,
-                 global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
-                 page_key=page_key, file_name_prefix=page_key,
-                 reabiertos_set=reabiertos_set 
-             )
+                st.markdown("---")
+                st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
+                display_detail_table(
+                    df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
+                    role=role, role_supervisor_id=role_supervisor_id,
+                    global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
+                    page_key=page_key, file_name_prefix=page_key,
+                    reabiertos_set=reabiertos_set 
+                )
         return
         
     kpis = calcular_kpis(df_page_data, df_full_historial)
@@ -1309,8 +1378,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
         
-        # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
-        resumen_admin = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+        # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+        resumen_admin = crear_resumen_admin(df_page_data, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
         
         if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
             st.warning("No hay datos de supervisores para graficar con los filtros actuales.")
@@ -1407,8 +1476,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         
-        # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
-        resumen_sup = crear_resumen_admin(df_page_data, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+        # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+        resumen_sup = crear_resumen_admin(df_page_data, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
         
         st.dataframe(
             resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
@@ -1418,8 +1487,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
-            # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
-            resumen_tec = crear_resumen_admin(df_page_data, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+            # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+            resumen_tec = crear_resumen_admin(df_page_data, df_head_count, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
             
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
@@ -1446,8 +1515,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
                 
-                # --- MODIFICADO: Añadido 'es_puntualidad_page=es_puntualidad_flag' ---
-                resumen = crear_resumen_admin(df_page_data, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+                # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+                resumen = crear_resumen_admin(df_page_data, df_head_count, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
                 
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
@@ -1483,6 +1552,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
+# --- End of Render Dashboard Function ---
+# ***** FIN CAMBIO v2.7.5 *****
 # --- End of Render Dashboard Function ---
 # ***** FIN CAMBIO v2.7.5 *****
 
@@ -1820,7 +1891,8 @@ if menu == "🏠 Principal":
             title_prefix="Principal", df_page_data=df_unicos, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="principal",
-            reabiertos_set=set_casos_reabiertos, # <-- PASANDO REABIERTOS
+            reabiertos_set=set_casos_reabiertos,
+            df_head_count=df_head_count, # <-- PASANDO REABIERTOS
             critical_metric_key='Pendientes' 
         )
     else: 
@@ -1881,7 +1953,8 @@ elif menu == "📊 Análisis PYMEs":
         title_prefix="Análisis PYMEs", df_page_data=df_pymes, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes",
-        reabiertos_set=set_casos_reabiertos, # <-- PASANDO REABIERTOS
+        reabiertos_set=set_casos_reabiertos,
+        df_head_count=df_head_count, # <-- PASANDO REABIERTOS
         critical_metric_key='Pymes_Vencidos' # <-- Nueva métrica crítica para PYMEs
     )
 
@@ -1940,6 +2013,7 @@ elif menu == "⏰ Puntualidad":
         status_filter=estatus_sel, 
         page_key="puntualidad", # La flag se activará con esto
         reabiertos_set=set_casos_reabiertos,
+        df_head_count=df_head_count,
         kpi_override=kpi_override_dict # <-- Anula los KPIs
     )
     # --- FIN DE LA NUEVA LÓGICA ---
@@ -1996,6 +2070,7 @@ elif menu == "🎯 Citas Puntuales":
         title_prefix="Citas Puntuales", df_page_data=df_citas, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="citas",
+        df_head_count=df_head_count,
         reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
     )
 
@@ -2196,6 +2271,7 @@ elif menu == "📅 Antiguas":
             title_prefix="Antigüedad 3 Días", df_page_data=df_3_dias, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="antiguas_3_dias",
+            df_head_count=df_head_count,
             reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
     with tab2:
@@ -2209,6 +2285,7 @@ elif menu == "📅 Antiguas":
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="antiguas_extrema", critical_metric_key='Total',
+            df_head_count=df_head_count,
             reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
@@ -2251,6 +2328,7 @@ elif menu == "📈 Rendimiento":
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin,
+            df_head_count=df_head_count,
             reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
         )
 
@@ -2357,5 +2435,4 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
 
