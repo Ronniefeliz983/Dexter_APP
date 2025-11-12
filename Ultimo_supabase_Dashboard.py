@@ -798,6 +798,7 @@ def aplicar_estilo_resumen_tecnico(row):
     return styles
 
 # --- ¡FUNCIÓN MODIFICADA! ---
+# --- ¡FUNCIÓN MODIFICADA! ---
 def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
     # --- MODIFICADO: Definición de columnas base (sin 'nombre' todavía) ---
     cols_base = [
@@ -813,19 +814,14 @@ def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecn
 
     
     if df is None or df.empty:
-        # ¡NUEVO! Añadir 'nombre' a las columnas vacías si aplica
-        if agrupar_por == 'Supervisor':
-             cols.insert(1, 'nombre')
+        # Columna 'nombre' ya no se añade aquí
         return pd.DataFrame(columns=cols)
     
     if agrupar_por not in df.columns or 'OrdenExterna' not in df.columns or 'Estado' not in df.columns:
         st.warning(f"Faltan columnas esenciales para crear el resumen.")
-        if agrupar_por == 'Supervisor':
-             cols.insert(1, 'nombre')
         return pd.DataFrame(columns=cols)
         
     df_copy = df.copy()
-    # ¡NUEVO! Normalizar también la columna de agrupación para el merge
     df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str).str.lower()
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
 
@@ -843,7 +839,7 @@ def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecn
     # --- Lógica de Puntualidad (sin cambios) ---
     estados_citados = ['pendiente de calendarizacion', 'calendarizado']
     
-    # Pre-calcular las categorías
+    # Pre-calcular las categorías (sin cambios)
     agg_dict_base = {
         'Cerrados': ('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
         'Referidos': ('Estado', lambda x: (x == 'pend trab interno').sum()),
@@ -864,28 +860,43 @@ def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecn
     # Calcular el resumen con TODOS los datos
     resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
 
-    # --- ¡NUEVO! AÑADIR NOMBRES DE SUPERVISOR (MERGE) ---
+    # --- ¡BLOQUE DE MERGE MODIFICADO! ---
     if agrupar_por == 'Supervisor' and df_head_count is not None and not df_head_count.empty:
         try:
-            # Aseguramos que la clave de merge en 'resumen' también esté normalizada
-            resumen[agrupar_por] = resumen[agrupar_por].astype(str).str.lower()
+            # 1. Guardar el ID original para el merge
+            resumen['supervisor_id_merge_key'] = resumen[agrupar_por].astype(str).str.lower()
             
             resumen = pd.merge(
                 resumen,
-                df_head_count, # Esta tabla ya tiene 'Tarjeta' normalizada desde la carga
-                left_on='Supervisor', # Columna en 'resumen'
-                right_on='tarjeta',   # Columna en 'df_head_count'
+                df_head_count, # Esta tabla ya tiene 'tarjeta' normalizada
+                left_on='supervisor_id_merge_key', 
+                right_on='tarjeta',
                 how='left'
             )
-            resumen.drop(columns=['tarjeta'], inplace=True, errors='ignore')
-            resumen['nombre'] = resumen['nombre'].fillna('Nombre no encontrado')
+            resumen.drop(columns=['tarjeta', 'supervisor_id_merge_key'], inplace=True, errors='ignore') 
+            
+            # 2. Llenar NAs y capitalizar nombres
+            resumen['nombre'] = resumen['nombre'].fillna('Nombre no encontrado').astype(str).str.title()
+            
+            # 3. Crear la columna combinada
+            #    'agrupar_por' (Supervisor) todavía contiene el ID (ej. 601665)
+            resumen['Supervisor_Combinado'] = resumen['nombre'] + " (" + resumen[agrupar_por].astype(str) + ")"
+            
+            # 4. Corregir los que no se encontraron
+            mask_no_encontrado = resumen['nombre'] == 'Nombre No Encontrado' # .title() lo capitalizó
+            resumen.loc[mask_no_encontrado, 'Supervisor_Combinado'] = resumen.loc[mask_no_encontrado, agrupar_por]
+            
+            # 5. Eliminar la columna 'Supervisor' (ID) original y 'nombre'
+            resumen.drop(columns=[agrupar_por, 'nombre'], inplace=True)
+            
+            # 6. Renombrar la nueva columna combinada de nuevo a 'Supervisor'
+            resumen.rename(columns={'Supervisor_Combinado': agrupar_por}, inplace=True)
+            
         except Exception as e:
             st.warning(f"No se pudo hacer merge con nombres de supervisor: {e}")
-            resumen['nombre'] = 'Error'
-    elif agrupar_por == 'Supervisor':
-        # Si la tabla de head_count está vacía o falló, al menos crear la columna
-        resumen['nombre'] = 'N/A'
-    # --- FIN DE AÑADIR NOMBRES ---
+            # Si falla, no se crea la columna 'nombre' y el código sigue
+    
+    # --- FIN DE MODIFICACIÓN DE MERGE ---
 
     # --- Lógica de 'Total Manejado' y 'Eficiencia' (sin cambios) ---
     if es_pyme_page:
@@ -911,10 +922,10 @@ def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecn
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         total_row[agrupar_por] = 'TOTAL'
-        # ¡NUEVO! Añadir celda vacía para el nombre en la fila TOTAL
-        if 'nombre' in resumen.columns:
-            total_row['nombre'] = ''
-            
+        
+        # --- ¡BLOQUE DE 'nombre' ELIMINADO! ---
+        # Ya no es necesaria la columna 'nombre'
+        
         total_row['Total'] = resumen['Total'].sum()
         total_row['Cerrados'] = resumen['Cerrados'].sum()
         total_row['Referidos'] = resumen['Referidos'].sum()
@@ -933,16 +944,16 @@ def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecn
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
     
-    # ¡MODIFICADO! Lógica de orden de columnas (añadir 'nombre')
+    # ¡MODIFICADO! Lógica de orden de columnas (SE ELIMINA 'nombre')
     if es_pyme_page:
         column_order = [
-            agrupar_por, 'nombre', 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
             'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
             'Eficiencia_Total_%'
         ]
     else:
         column_order = [
-            agrupar_por, 'nombre', 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
             'Pendientes', 'Total Manejado', 'Eficiencia_Total_%'
         ]
     
