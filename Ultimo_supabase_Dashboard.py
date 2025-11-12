@@ -639,9 +639,9 @@ def cargar_head_count_supervisor():
             return pd.DataFrame()
         
         # Normalizar la columna 'Tarjeta' para el merge
-        if 'Tarjeta' in df_sql.columns:
+        if 'tarjeta' in df_sql.columns:
             # Aseguramos que sea string y minúscula, igual que la columna Supervisor
-            df_sql['Tarjeta'] = df_sql['Tarjeta'].astype(str).str.strip().str.lower()
+            df_sql['tarjeta'] = df_sql['tarjeta'].astype(str).str.strip().str.lower()
         else:
             st.error("La tabla 'head_count_supervisor' no tiene la columna 'Tarjeta'.")
             return pd.DataFrame()
@@ -651,7 +651,7 @@ def cargar_head_count_supervisor():
             return pd.DataFrame()
 
         # Devolvemos solo las columnas necesarias
-        return df_sql[['Tarjeta', 'nombre']]
+        return df_sql[['tarjeta', 'nombre']]
     except Exception as e:
         # Si la tabla no existe, devolvemos un DF vacío pero no paramos el script
         if "does not exist" in str(e).lower():
