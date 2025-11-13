@@ -1,2168 +1,2466 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
-import os
-import io
-import re
-from sqlalchemy import create_engine, text, inspect
-import traceback # Para mostrar errores detallados
+from datetime import datetime, time, timedelta
+from streamlit_autorefresh import st_autorefresh
+import numpy as np
+from io import BytesIO
+import os # Importado para la conexión
+import traceback # Para errores detallados
 
-# Intenta importar pyperclip y maneja el error si no está instalado
-try:
-    import pyperclip
-except ImportError:
-    st.error("La librería 'pyperclip' es necesaria. Por favor, instálala con: pip install pyperclip")
-    st.stop()
+# --- NUEVOS IMPORTS PARA SUPABASE ---
+from sqlalchemy import create_engine, text
+
+# --- NUEVOS IMPORTS PARA PLOTLY ---
+import plotly.express as px
+import plotly.graph_objects as go
+
+# --- ¡NUEVO! IMPORT PARA HASHING DE CONTRASEÑAS ---
+import bcrypt
+# ---------------------------------
+
+
+# --------------------------
+# Configuración de la página
+# --------------------------
+st.set_page_config(page_title="Dashboard Trabajos S - v2.7.7", layout="wide") # <-- Versión actualizada
+
+# --- CSS MEJORADO (CON ALINEACIÓN DE TARJETAS) ---
+st.markdown("""
+<style>
+    /* --- 1. Estilo de Tarjetas (Métricas y Contenedores) --- */
+    [data-testid="stMetric"] {
+        background-color: #ffffff; /* Fondo blanco */
+        border: 1px solid #e0e0e0; /* Borde gris claro */
+        border-radius: 10px; /* Bordes redondeados */
+        padding: 15px; /* Espacio interior (reducido para ser más compacto) */
+        box-shadow: 0 4px 12px rgba(0,0,0,0.04); /* Sombra sutil */
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
+    }
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 15px; /* Espacio interior (reducido) */
+        box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+        min-height: 104px; /* MEJORA: Altura mínima para alinear */
+    }
+    [data-testid="stVerticalBlockBorderWrapper"] > div { border: none; }
+
+    /* --- 2. Encabezados de Tabla en Negrita --- */
+    [data-testid="stDataFrame"] thead th {
+        font-weight: 700 !important; /* '700' es 'bold' (negrita) */
+    }
+
+    /* --- 3. Layout más Ajustado (Menos Espacio) --- */
+    [data-testid="stHorizontalBlock"] > div {
+        gap: 0.5rem; /* El valor por defecto es 1rem */
+    }
+    [data-testid="stVerticalBlock"] > div {
+        gap: 0.5rem; /* El valor por defecto es 1rem */
+    }
+    
+    /* --- 4. (NUEVO v2.7.5) Estilo para tablas con highlighting --- */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+    }
+</style>
+""", unsafe_allow_html=True)
+# --- FIN DEL CÓDIGO CSS ---
+
 
 # ==============================================================================
-# --- CONFIGURACIÓN Y CONSTANTES ---
-# ==============================================================================
-st.set_page_config(
-    page_title="Sistema KUNAI - v2.9.0", # Título actualizado
-    page_icon="📋",
-    layout="wide"
-)
-
-# ***** CONEXIÓN A SUPABASE *****
-DATABASE_URL = "postgresql://postgres.jbsycnrlkvdjbiktkjpl:xCt4FTBhDPbFT@aws-1-us-east-2.pooler.supabase.com:6543/postgres"
-
-# ***** ARCHIVOS LOCALES *****
-ARCHIVO_SNAPSHOT_HOY = "kunai_snapshot_hoy.csv"
-ARCHIVO_HISTORIAL_CAMBIOS = "kunai_historial_cambios.csv"
-ARCHIVO_REABIERTOS = "kunai_reabiertos_hoy.csv" # Es histórico
-ARCHIVO_FECHA_ULTIMO_RESET = "ultima_fecha_reset.txt"
-ARCHIVO_LOTE_ACTUAL = "lote_actual.txt"
-# --- v2.9.0: Nuevos archivos para Head Count ---
-ARCHIVO_HC_TECNICOS = "kunai_hc_tecnicos.csv"
-ARCHIVO_HC_SUPERVISORES = "kunai_hc_supervisores.csv"
-
-# FILTROS DE SUPERVISORES PERMITIDOS
-SUPERVISORES_PERMITIDOS = ['601665', '601378', '61768', '601799']
-FILTRAR_POR_SUPERVISOR = True
-
-# ***** COLUMNAS A IGNORAR EN DETECCIÓN DE CAMBIOS *****
-COLUMNAS_IGNORAR_CAMBIOS = {
-    'Timestamp_Procesado',
-    'Fuente_Paso',
-    'Tipo_Evento',
-    'Lote_Procesado',
-    'Cabina',
-    'Terminal',
-    'Cantidad_de_lineas',
-    'Re_Digitada',
-    'Fecha_Nacimiento' 
-}
-
-# ==============================================================================
-# --- CONEXIÓN Y CREACIÓN DE TABLAS EN SUPABASE ---
+# --- Conexión Supabase (Necesaria para Login y Datos) ---
 # ==============================================================================
 
 @st.cache_resource
 def get_database_engine():
-    """Crea una conexión a Supabase y se asegura de que las tablas/columnas existan."""
+    """Crea una conexión a Supabase."""
+    DATABASE_URL = "" # Se poblará desde st.secrets
+    try:
+        DATABASE_URL = st.secrets["postgres"]["DATABASE_URL"]
+    except Exception:
+        DATABASE_URL = os.environ.get("DATABASE_URL")
+
+    if not DATABASE_URL:
+        st.error("⚠️ No se encontró la 'DATABASE_URL'.")
+        st.stop()
+        return None
+
     try:
         engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,
-            connect_args={
-                'options': '-csearch_path=public',
-                'connect_timeout': 10
-            }
+            pool_recycle=1800,
+            connect_args={'options': '-csearch_path=public'}
         )
-
         with engine.connect() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS snapshot_hoy (
-                    id SERIAL PRIMARY KEY, trabajo TEXT, orden_externa TEXT UNIQUE, cliente TEXT, vence TEXT,
-                    oe_creacion TEXT, oe_vence TEXT, oe_vencimiento TEXT, prioridad TEXT,
-                    tipo_de_prioridad TEXT, calendarizada TEXT, tanda_preferida TEXT, reclamacion TEXT,
-                    asignado_a TEXT, compania TEXT, supervisor TEXT, pool TEXT, estado TEXT, tecnologia TEXT,
-                    tipo_servicio TEXT, organizacion TEXT, sintoma TEXT, creado TEXT, tipo_cliente TEXT,
-                    segmento_cliente TEXT, ciudad TEXT, sector TEXT, barrio TEXT, cabina TEXT, terminal TEXT,
-                    cantidad_de_lineas TEXT, re_digitada TEXT, timestamp_procesado TIMESTAMP, fuente_paso TEXT,
-                    fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS historial_cambios (
-                    id SERIAL PRIMARY KEY, trabajo TEXT, orden_externa TEXT, cliente TEXT, vence TEXT,
-                    oe_creacion TEXT, oe_vence TEXT, oe_vencimiento TEXT, prioridad TEXT,
-                    tipo_de_prioridad TEXT, calendarizada TEXT, tanda_preferida TEXT, reclamacion TEXT,
-                    asignado_a TEXT, compania TEXT, supervisor TEXT, pool TEXT, estado TEXT, tecnologia TEXT,
-                    tipo_servicio TEXT, organizacion TEXT, sintoma TEXT, creado TEXT, tipo_cliente TEXT,
-                    segmento_cliente TEXT, ciudad TEXT, sector TEXT, barrio TEXT, cabina TEXT, terminal TEXT,
-                    cantidad_de_lineas TEXT, re_digitada TEXT, timestamp_procesado TIMESTAMP, fuente_paso TEXT,
-                    tipo_evento TEXT,
-                    lote_procesado INTEGER,
-                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS reabiertos (
-                    caso TEXT,
-                    codigo TEXT,
-                    tarjeta TEXT,
-                    supervisor TEXT,
-                    fecha TEXT,
-                    condicion TEXT
-                );
-                
-                /* --- v2.9.0: Nuevas tablas de Head Count --- */
-                CREATE TABLE IF NOT EXISTS head_count_tecnico (
-                    ficha TEXT,
-                    tarjeta TEXT PRIMARY KEY, /* Usamos tarjeta como Primary Key */
-                    nombre TEXT,
-                    telefono TEXT,
-                    funcion TEXT,
-                    supervisor TEXT,
-                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS head_count_supervisor (
-                    ficha TEXT,
-                    tarjeta TEXT PRIMARY KEY, /* Usamos tarjeta como Primary Key */
-                    nombre TEXT,
-                    telefono TEXT,
-                    rol TEXT,
-                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                /* --- Fin v2.9.0 --- */
-            """))
-
-            inspector = inspect(engine)
-            for table_name in ['historial_cambios']: 
-                columns = [col['name'] for col in inspector.get_columns(table_name)]
-                if 'lote_procesado' not in columns:
-                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN lote_procesado INTEGER;"))
-                    st.info(f"Columna 'lote_procesado' añadida a la tabla '{table_name}' en Supabase.")
-                    conn.commit()
-
-            reabiertos_columns = [col['name'] for col in inspector.get_columns('reabiertos')]
-            
-            if 'tarjeta_supervisor' not in reabiertos_columns: 
-                try:
-                    conn.execute(text("ALTER TABLE reabiertos ADD COLUMN tarjeta_supervisor TEXT;"))
-                    st.info("Columna 'tarjeta_supervisor' añadida a 'reabiertos'. Rellenando datos existentes...")
-                    
-                    conn.execute(text("""
-                        UPDATE reabiertos
-                        SET tarjeta_supervisor = CASE
-                            WHEN LOWER(TRIM(supervisor)) = 'aneudy peralta garcia' THEN '601378'
-                            WHEN LOWER(TRIM(supervisor)) = 'evangelista nu?ez' THEN '61768'
-                            WHEN LOWER(TRIM(supervisor)) = 'evangelista nuñez' THEN '61768'
-                            WHEN LOWER(TRIM(supervisor)) = 'iven eduardo urbaez gonzalez' THEN '601665'
-                            WHEN LOWER(TRIM(supervisor)) = 'jean carlos ramirez' THEN '601799'
-                            ELSE NULL
-                        END
-                        WHERE tarjeta_supervisor IS NULL;
-                    """))
-                    st.success("¡Datos rellenados! Los registros existentes de 'reabiertos' han sido actualizados.")
-                    conn.commit() 
-                except Exception as e:
-                    st.error(f"¡Error! No se pudo añadir/rellenar la columna 'tarjeta_supervisor': {e}")
-                    conn.rollback() 
-            
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_snapshot_orden ON snapshot_hoy(orden_externa);"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_historial_orden ON historial_cambios(orden_externa);"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_historial_lote ON historial_cambios(lote_procesado);"))
-            
-            # --- v2.9.0: Índices para las nuevas tablas ---
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_hc_tecnico_tarjeta ON head_count_tecnico(tarjeta);"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_hc_supervisor_tarjeta ON head_count_supervisor(tarjeta);"))
-            # --- Fin v2.9.0 ---
-
-            conn.commit()
-
-        st.sidebar.success("✅ Conectado a Supabase")
+            conn.execute(text("SELECT 1"))
         return engine
     except Exception as e:
-        st.sidebar.error(f"⚠️ Error conectando/creando tablas en Supabase: {e}")
-        st.sidebar.info("📋 Continuando con CSVs locales únicamente")
+        st.error(f"⚠️ Error conectando a Supabase: {e}")
+        st.stop()
         return None
 
-engine = get_database_engine()
+# --- ¡NUEVO! FUNCIONES DE HASHING ---
+def hash_password(password):
+    """Genera un hash bcrypt para una contraseña."""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-# ==============================================================================
-# --- FUNCIONES HELPER ---
-# ==============================================================================
-def get_column_mappings():
-    forward = {
-        'Trabajo': 'trabajo', 'OrdenExterna': 'orden_externa', 'Cliente': 'cliente', 'Vence': 'vence',
-        'OE_Creacion': 'oe_creacion', 'OE_Vence': 'oe_vence', 'OE_Vencimiento': 'oe_vencimiento',
-        'Prioridad': 'prioridad', 'Tipo_de_prioridad': 'tipo_de_prioridad', 'Calendarizada': 'calendarizada',
-        'Tanda_preferida': 'tanda_preferida', 'Reclamacion': 'reclamacion', 'Asignado_A': 'asignado_a',
-        'Compania': 'compania', 'Supervisor': 'supervisor', 'Pool': 'pool', 'Estado': 'estado',
-        'Tecnologia': 'tecnologia', 'Tipo_servicio': 'tipo_servicio', 'Organizacion': 'organizacion',
-        'Sintoma': 'sintoma', 'Creado': 'creado', 'Tipo_Cliente': 'tipo_cliente', 'Segmento_Cliente': 'segmento_cliente',
-        'Ciudad': 'ciudad', 'Sector': 'sector', 'Barrio': 'barrio', 'Cabina': 'cabina', 'Terminal': 'terminal',
-        'Cantidad_de_lineas': 'cantidad_de_lineas', 'Re_Digitada': 're_digitada', 'Timestamp_Procesado': 'timestamp_procesado',
-        'Fuente_Paso': 'fuente_paso', 'Tipo_Evento': 'tipo_evento',
-        'Lote_Procesado': 'lote_procesado',
-        'Fecha_Nacimiento': 'fecha_nacimiento' 
-    }
-    reverse = {v: k for k, v in forward.items()}
-    return forward, reverse
-
-COLUMN_MAPPING_FORWARD, COLUMN_MAPPING_REVERSE = get_column_mappings()
-
-def reordenar_dataframe_para_salida(df, es_snapshot=False):
-    if df.empty:
-        return df
-
-    columnas_orden_base = list(COLUMN_MAPPING_FORWARD.keys())
-    columnas_finales = []
-
-    for col in columnas_orden_base:
-        if col == 'Lote_Procesado' and es_snapshot:
-            continue
-        if col in df.columns:
-            columnas_finales.append(col)
-
-    for col in df.columns:
-        if col not in columnas_finales:
-            if col == 'Lote_Procesado' and not es_snapshot:
-                continue 
-            columnas_finales.append(col)
-    
-    if not es_snapshot and 'Lote_Procesado' in df.columns and 'Lote_Procesado' not in columnas_finales:
-            columnas_finales.append('Lote_Procesado')
-
-    if 'Fecha_Nacimiento' in columnas_finales:
-        columnas_finales.remove('Fecha_Nacimiento')
-        columnas_finales.append('Fecha_Nacimiento')
-
+def check_password(password_input, hashed_password):
+    """Verifica una contraseña contra un hash."""
     try:
-        return df[columnas_finales]
-    except KeyError as e:
-        st.warning(f"Advertencia al reordenar columnas: {e}. Mostrando orden por defecto.")
-        return df
+        # bcrypt espera bytes
+        return bcrypt.checkpw(password_input.encode('utf-8'), hashed_password.encode('utf-8'))
+    except (ValueError, TypeError):
+        # Esto puede pasar si el hash guardado no es un hash válido (ej. texto plano)
+        return False
+# --- FIN FUNCIONES DE HASHING ---
 
-def normalizar_columnas_para_sql(df):
-    if df.empty: return df
-    df_sql = df.copy()
-    if 'Lote_Procesado' not in df_sql.columns:
-        df_sql['Lote_Procesado'] = 0
+
+# --------------------------
+# --- ¡SISTEMA DE LOGIN MODIFICADO! ---
+# --------------------------
+
+def consultar_usuario(username, password_input):
+    """
+    Consulta la tabla 'usuarios_dashboard' para verificar el login.
+    Ahora soporta HASH (bcrypt) y fallback a texto plano para migración.
+    """
+    engine = get_database_engine()
+    if engine is None:
+        st.error("Error de conexión con la base de datos.")
+        return None
+        
+    try:
+        with engine.connect() as conn:
+            # 1. Obtener el usuario SOLO por username
+            query = text("""
+                SELECT username, password, role, supervisor_id, nombre_supervisor 
+                FROM usuarios_dashboard 
+                WHERE username = :user
+            """)
+            
+            result = conn.execute(query, {"user": username})
+            user_data = result.fetchone()
+            
+            if user_data:
+                user_info = dict(user_data._mapping)
+                password_from_db = user_info['password']
+                
+                # 2. Verificar la contraseña en Python
+                
+                # Intenta verificar con bcrypt primero
+                if check_password(password_input, password_from_db):
+                    return user_info # Éxito (Contraseña hasheada)
+                
+                # Fallback: Si bcrypt falla, prueba con texto plano (para usuarios viejos)
+                if password_input == password_from_db:
+                    # ¡IMPORTANTE! Si coincide, actualiza el hash en la DB para el futuro
+                    try:
+                        new_hashed_pass = hash_password(password_input)
+                        update_query = text("UPDATE usuarios_dashboard SET password = :pass WHERE username = :user")
+                        conn.execute(update_query, {"pass": new_hashed_pass, "user": username})
+                        conn.commit()
+                    except Exception as e:
+                        st.warning(f"No se pudo actualizar la contraseña de '{username}' a hash: {e}")
+                    
+                    return user_info # Éxito (Contraseña en texto plano)
+                
+                # Si ambos fallan
+                return None
+            else:
+                return None # Usuario no encontrado
+                
+    except Exception as e:
+        st.error(f"Error al consultar el usuario: {e}")
+        return None
+
+def verificar_login():
+    """Maneja el sistema de inicio de sesión y roles de usuario (AHORA CON DB)."""
+    
+    st.session_state.setdefault('logged_in', False)
+    st.session_state.setdefault('username', None)
+    st.session_state.setdefault('user_role', None)
+    st.session_state.setdefault('supervisor_id', None)
+    st.session_state.setdefault('nombre_supervisor', None) 
+
+    if not st.session_state.logged_in:
+        st.title("🔐 Login - Dashboard Trabajos Dexter")
+        with st.form("login_form"):
+            usuario_input = st.text_input("👤 Usuario", placeholder="Ingresa tu usuario o ID supervisor")
+            password_input = st.text_input("🔑 Contraseña", type="password", placeholder="Ingresa tu contraseña")
+            submitted = st.form_submit_button("🚀 Iniciar Sesión")
+            
+            if submitted:
+                # Consultar la base de datos
+                user_info = consultar_usuario(usuario_input, password_input)
+                
+                if user_info:
+                    # Si la consulta fue exitosa
+                    st.session_state.logged_in = True
+                    st.session_state.username = user_info.get('username')
+                    st.session_state.user_role = user_info.get('role')
+                    st.session_state.supervisor_id = user_info.get('supervisor_id')
+                    st.session_state.nombre_supervisor = user_info.get('nombre_supervisor')
+                    st.rerun()
+                else:
+                    st.error("❌ Usuario o contraseña incorrectos")
+        return False
     else:
-        df_sql['Lote_Procesado'] = pd.to_numeric(df_sql['Lote_Procesado'], errors='coerce').astype('Int64')
-
-    
-    df_sql = df_sql.rename(columns=COLUMN_MAPPING_FORWARD)
-
-    for col_ts in ['timestamp_procesado', 'fecha_nacimiento']:
-        if col_ts in df_sql.columns:
-            if df_sql[col_ts].dtype == 'object':
-                df_sql[col_ts] = pd.to_datetime(df_sql[col_ts], errors='coerce')
-            df_sql[col_ts] = df_sql[col_ts].replace({pd.NaT: None})
-
-    if 'lote_procesado' in df_sql.columns:
-        df_sql['lote_procesado'] = df_sql['lote_procesado'].replace({pd.NA: None})
-
-    
-    return df_sql
-
-def normalizar_timestamps(df):
-    if df.empty:
-        return df
-    df = df.copy()
-    for col_ts in ['Timestamp_Procesado', 'Fecha_Nacimiento']:
-        if col_ts in df.columns:
-            df[col_ts] = pd.to_datetime(df[col_ts], errors='coerce')
-    return df
-
-def align_and_concat(df_base, df_new, fill_val=''):
-    df_base = normalizar_timestamps(df_base)
-    df_new = normalizar_timestamps(df_new)
-    
-    for df in [df_base, df_new]:
-        if 'Lote_Procesado' not in df.columns:
-            df['Lote_Procesado'] = 0
+        # El usuario ya está logueado
+        
+        # --- Lógica para mostrar el nombre ---
+        if st.session_state.nombre_supervisor:
+            nombre_base = st.session_state.nombre_supervisor
         else:
-            df['Lote_Procesado'] = pd.to_numeric(df['Lote_Procesado'], errors='coerce').fillna(0).astype(int)
+            nombre_base = {
+                "admin": "Administración",
+                "gerencia": "Gerencia",
+                "supervisor_old": "Supervisor General"
+            }.get(st.session_state.user_role, "Usuario Desconocido")
 
-    
-    cols_base = set(df_base.columns)
-    cols_new = set(df_new.columns)
-    
-    if len(cols_base.intersection(cols_new)) < (len(cols_base) / 2):
-        return pd.concat([df_base, df_new], ignore_index=True)
-    
-    all_cols = list(cols_base.union(cols_new))
-
-    df_base_aligned = df_base.reindex(columns=all_cols, fill_value=fill_val)
-    df_new_aligned = df_new.reindex(columns=all_cols, fill_value=fill_val)
-
-    if 'Lote_Procesado' in all_cols:
-        if fill_val == '':
-            df_base_aligned['Lote_Procesado'] = pd.to_numeric(df_base_aligned['Lote_Procesado'], errors='coerce').fillna(0).astype(int)
-            df_new_aligned['Lote_Procesado'] = pd.to_numeric(df_new_aligned['Lote_Procesado'], errors='coerce').fillna(0).astype(int)
-        else: 
-            if df_base_aligned['Lote_Procesado'].dtype not in ['int64', 'int32', 'Int64']:
-                    df_base_aligned['Lote_Procesado'] = df_base_aligned['Lote_Procesado'].astype(int)
-            if df_new_aligned['Lote_Procesado'].dtype not in ['int64', 'int32', 'Int64']:
-                    df_new_aligned['Lote_Procesado'] = df_new_aligned['Lote_Procesado'].astype(int)
-
-    
-    return pd.concat([df_base_aligned, df_new_aligned], ignore_index=True)
-
-# ==============================================================================
-# --- GESTIÓN DEL CONTADOR DE LOTE ---
-# ==============================================================================
-
-def leer_lote_actual() -> int:
-    if os.path.exists(ARCHIVO_LOTE_ACTUAL):
-        try:
-            with open(ARCHIVO_LOTE_ACTUAL, 'r') as f:
-                content = f.read().strip()
-                return int(content) if content else 0
-        except ValueError:
-                st.warning(f"⚠️ Archivo de lote '{ARCHIVO_LOTE_ACTUAL}' contiene valor no numérico. Reiniciando a 0.")
-                return 0 
-        except Exception as e:
-                st.warning(f"⚠️ Error leyendo lote de '{ARCHIVO_LOTE_ACTUAL}': {e}. Reiniciando a 0.")
-                return 0 
-    return 0 
-
-def guardar_lote_actual(lote: int):
-    try:
-        with open(ARCHIVO_LOTE_ACTUAL, 'w') as f:
-            f.write(str(lote))
-    except Exception as e:
-        st.warning(f"⚠️ No se pudo guardar el número de lote ({lote}) en '{ARCHIVO_LOTE_ACTUAL}': {e}")
-
-# ==============================================================================
-# --- GESTIÓN DE ARCHIVOS Y ESTADO ---
-# ==============================================================================
-def verificar_y_limpiar_archivos_dia():
-    hoy_iso = date.today().isoformat()
-    ultima_fecha_reset = None
-    fecha_reset_leida = False
-
-    if os.path.exists(ARCHIVO_FECHA_ULTIMO_RESET):
-        try:
-            with open(ARCHIVO_FECHA_ULTIMO_RESET, 'r') as f:
-                ultima_fecha_reset = f.read().strip()
-                fecha_reset_leida = True
-        except Exception as e:
-            st.warning(f"⚠️ Error leyendo fecha de reset: {e}")
-
-    if not fecha_reset_leida or ultima_fecha_reset != hoy_iso:
-        st.info(f"🆕 Detectado nuevo día ({hoy_iso}) o primer inicio.")
-
-        # --- MODIFICACIÓN v2.8.0: 'reabiertos' YA NO SE BORRA ---
-        # --- v2.9.0: 'hc_tecnicos' y 'hc_supervisores' TAMPOCO SE BORRAN ---
-        for f in [ARCHIVO_SNAPSHOT_HOY, ARCHIVO_HISTORIAL_CAMBIOS]: # ARCHIVO_REABIERTOS y HC* quitados
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                    st.info(f"🗑️ Archivo CSV diario limpiado: {f}")
-                except Exception as e:
-                    st.warning(f"⚠️ No se pudo limpiar el archivo {f}: {e}")
-
-        if engine:
-            try:
-                with engine.connect() as conn:
-                    # --- MODIFICACIÓN v2.8.0 / v2.9.0: Tablas persistentes NO SE TRUNCAN ---
-                    conn.execute(text("TRUNCATE TABLE snapshot_hoy;"))
-                    conn.execute(text("TRUNCATE TABLE historial_cambios;")) 
-                    # TRUNCATE TABLE reabiertos; <-- SE HA QUITADO
-                    # TRUNCATE TABLE head_count_tecnico; <-- NO SE AÑADE
-                    # TRUNCATE TABLE head_count_supervisor; <-- NO SE AÑADE
-                    conn.commit()
-                st.info("🆕 Tablas diarias ('snapshot_hoy' y 'historial_cambios') limpiadas en Supabase. 'reabiertos' y 'head_count' son historiales permanentes.")
-            except Exception as e: st.warning(f"⚠️ Error limpiando tablas diarias de Supabase: {e}")
-
-        try:
-            with open(ARCHIVO_FECHA_ULTIMO_RESET, 'w') as f: f.write(hoy_iso)
-        except Exception as e:
-            st.warning(f"⚠️ No se pudo guardar la fecha de reset: {e}")
-
+        # Añadir el ID de supervisor si existe
+        supervisor_id_str = st.session_state.get('supervisor_id')
         
-        guardar_lote_actual(0)
-        st.info("🔢 Contador de Lote reseteado a 0.")
-        if 'lote_actual' in st.session_state:
-            st.session_state['lote_actual'] = 0
-
-        
-        # --- MODIFICACIÓN v2.8.0: 'reabiertos' YA NO SE RESETEA ---
-        for state_key in ['snapshot_hoy', 'historial_cambios']: # 'reabiertos' y 'hc_*' quitados
-            if state_key in st.session_state:
-                st.session_state[state_key] = pd.DataFrame()
-
-def inicializar_estado():
-    verificar_y_limpiar_archivos_dia() 
-
-    if 'lote_actual' not in st.session_state:
-        st.session_state['lote_actual'] = leer_lote_actual()
-
-    # --- v2.9.0: Añadidas nuevas tablas persistentes a la carga ---
-    estados_tablas = {
-        "snapshot_hoy": ("snapshot_hoy", ARCHIVO_SNAPSHOT_HOY),
-        "historial_cambios": ("historial_cambios", ARCHIVO_HISTORIAL_CAMBIOS),
-        "reabiertos": ("reabiertos", ARCHIVO_REABIERTOS),
-        "head_count_tecnicos": ("head_count_tecnico", ARCHIVO_HC_TECNICOS),
-        "head_count_supervisores": ("head_count_supervisor", ARCHIVO_HC_SUPERVISORES)
-    }
-
-    columnas_esperadas = list(COLUMN_MAPPING_FORWARD.keys())
-
-    for estado, (tabla, archivo) in estados_tablas.items():
-        if estado not in st.session_state:
-            df_cargado = pd.DataFrame()
-
-            # --- v2.9.0: Lógica de carga unificada para todas las tablas persistentes ---
-            if estado in ["reabiertos", "head_count_tecnicos", "head_count_supervisores"]:
-                if engine:
-                    try:
-                        # Para head_count, quitamos columnas de registro que no se editan
-                        query = f"SELECT * FROM {tabla}"
-                        cols_to_select = []
-                        
-                        if estado in ["head_count_tecnicos", "head_count_supervisores"]:
-                            inspector = inspect(engine)
-                            cols = [col['name'] for col in inspector.get_columns(tabla)]
-                            cols_to_select = [c for c in cols if c != 'fecha_registro']
-                        
-                        if cols_to_select:
-                             query = f"SELECT {', '.join(cols_to_select)} FROM {tabla}"
-
-                        df_cargado = pd.read_sql(query, engine)
-                        df_cargado = df_cargado.fillna('').replace('None', '')
-                    except Exception as e:
-                        st.warning(f"⚠️ Error cargando '{tabla}' desde Supabase: {e}. Intentando CSV...")
-                
-                if df_cargado.empty and os.path.exists(archivo):
-                    try:
-                        df_cargado = pd.read_csv(archivo, sep=';', dtype=str).fillna('').replace('None', '')
-                        # Limpiar columnas extra de CSV si es necesario
-                        if 'fecha_registro' in df_cargado.columns:
-                            df_cargado = df_cargado.drop(columns=['fecha_registro'])
-                    except Exception as e:
-                        st.warning(f"⚠️ Error cargando '{archivo}': {e}")
-                
-                st.session_state[estado] = df_cargado
-                continue 
-            
-            # --- Lógica existente para snapshot_hoy y historial_cambios ---
-            es_snapshot = (estado == "snapshot_hoy")
-            
-            if engine:
-                try:
-                    df_cargado = pd.read_sql(f"SELECT * FROM {tabla} ORDER BY id", engine)
-                    if not df_cargado.empty:
-                        if 'lote_procesado' not in df_cargado.columns and not es_snapshot:
-                            df_cargado['lote_procesado'] = 0
-                        columnas_sql_mapeadas = {v: k for k, v in COLUMN_MAPPING_FORWARD.items() if v in df_cargado.columns}
-                        df_cargado.rename(columns=columnas_sql_mapeadas, inplace=True)
-                        
-                        for col in columnas_esperadas:
-                            if col not in df_cargado.columns:
-                                df_cargado[col] = '' if col != 'Lote_Procesado' else 0
-
-                        df_cargado = reordenar_dataframe_para_salida(df_cargado, es_snapshot=es_snapshot)
-
-                        df_cargado = df_cargado.fillna('').replace('None', '')
-                        if 'Lote_Procesado' in df_cargado.columns:
-                            df_cargado['Lote_Procesado'] = pd.to_numeric(df_cargado['Lote_Procesado'], errors='coerce').fillna(0).astype(int)
-                        
-                        df_cargado = normalizar_timestamps(df_cargado)
-                        
-                except Exception as e:
-                    st.warning(f"⚠️ Error cargando '{tabla}' desde Supabase: {e}. Intentando CSV...")
-                    df_cargado = pd.DataFrame()
-
-            if df_cargado.empty and os.path.exists(archivo):
-                try:
-                    df_cargado = pd.read_csv(archivo, sep=';', dtype=str).fillna('').replace('None', '')
-                    if not df_cargado.empty: 
-                        if 'lote_procesado' not in df_cargado.columns and not es_snapshot:
-                            df_cargado['Lote_Procesado'] = '0'
-
-                        for col in columnas_esperadas:
-                            if col not in df_cargado.columns:
-                                df_cargado[col] = '' if col != 'Lote_Procesado' else '0'
-                                
-                        df_cargado = reordenar_dataframe_para_salida(df_cargado, es_snapshot=es_snapshot)
-                        
-                        if 'Lote_Procesado' in df_cargado.columns:
-                            df_cargado['Lote_Procesado'] = pd.to_numeric(df_cargado['Lote_Procesado'], errors='coerce').fillna(0).astype(int)
-                        
-                        df_cargado = normalizar_timestamps(df_cargado)
-
-                except Exception as e:
-                    st.warning(f"⚠️ Error cargando '{archivo}': {e}")
-                    df_cargado = pd.DataFrame()
-
-            if estado == "historial_cambios" and not df_cargado.empty and 'OrdenExterna' in df_cargado.columns and 'Timestamp_Procesado' in df_cargado.columns:
-                if not df_cargado['Timestamp_Procesado'].isna().all():
-                    df_cargado['Fecha_Nacimiento'] = df_cargado.groupby('OrdenExterna')['Timestamp_Procesado'].transform('min')
-                else:
-                    df_cargado['Fecha_Nacimiento'] = pd.NaT
-
-            st.session_state[estado] = df_cargado
-
-    # --- v2.9.0: Añadidos estados de acumulación para las nuevas pestañas ---
-    keys_restantes = ["datos_paso1_acumulado", "datos_paso2_acumulado", "ordenes_a_buscar",
-                        "ordenes_no_encontradas", "clasificaciones", 
-                        "datos_monitoreo_acumulado_gen", 
-                        "datos_monitoreo_acumulado_hoy", 
-                        "ordenes_monitoreo_no_encontradas_gen", 
-                        "ordenes_monitoreo_no_encontradas_hoy", 
-                        "datos_correccion_acumulado",
-                        "datos_reabiertos_acumulado",
-                        "datos_hc_tecnicos_acumulado",
-                        "datos_hc_supervisores_acumulado"
-                    ] 
-                        
-    for key in keys_restantes:
-        if key not in st.session_state:
-            st.session_state[key] = pd.DataFrame() if 'datos' in key else [] if 'ordenes' in key else {}
-
-inicializar_estado()
-
-with st.sidebar:
-    st.markdown("---")
-    st.header("🔄 Sincronización")
-    if st.button("Forzar Recarga de Datos", type="primary", use_container_width=True, help="Borra la memoria local y recarga todo desde Supabase/CSVs."):
-        # --- v2.9.0: Añadidas nuevas keys a limpiar ---
-        keys_a_limpiar = [
-            "snapshot_hoy", 
-            "historial_cambios",
-            "reabiertos", 
-            "head_count_tecnicos",
-            "head_count_supervisores",
-            "datos_paso1_acumulado", 
-            "datos_paso2_acumulado", 
-            "ordenes_a_buscar",
-            "ordenes_no_encontradas", 
-            "clasificaciones", 
-            "datos_monitoreo_acumulado_gen",
-            "datos_monitoreo_acumulado_hoy",
-            "ordenes_monitoreo_no_encontradas_gen",
-            "ordenes_monitoreo_no_encontradas_hoy",
-            "datos_correccion_acumulado",
-            "datos_reabiertos_acumulado", 
-            "datos_hc_tecnicos_acumulado",
-            "datos_hc_supervisores_acumulado",
-            "lote_actual"
-        ]
-        
-        for key in keys_a_limpiar:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        st.success("Memoria local limpiada. Recargando...")
-        st.rerun()
-
-
-# ==============================================================================
-# --- FUNCIONES DE PROCESAMIENTO ---
-# ==============================================================================
-
-def procesar_pegado_simple(texto: str, columnas: list) -> pd.DataFrame:
-    """
-    Procesa texto pegado (asume tab-separated de Excel) sin encabezados.
-    Usado para 'Reabiertos' y 'Head Count'.
-    """
-    if not texto or texto.isspace():
-        return pd.DataFrame()
-    try:
-        df = pd.read_csv(
-            io.StringIO(texto), 
-            sep='\t',       
-            header=None,    
-            dtype=str,
-            on_bad_lines='warn' 
-        )
-        df = df.dropna(how='all') 
-        
-        if df.empty:
-            st.warning("No se encontraron datos en el portapapeles.")
-            return pd.DataFrame()
-
-        if len(df.columns) != len(columnas):
-            st.error(f"Error: Se esperaban {len(columnas)} columnas ({', '.join(columnas)}), pero se encontraron {len(df.columns)}. Verifica los datos copiados de Excel.")
-            return pd.DataFrame()
-        
-        df.columns = columnas
-        df = df.fillna('') 
-        st.success(f"Se procesaron {len(df)} filas.")
-        return df
-    except Exception as e:
-        st.error(f"Error al procesar los datos pegados: {e}")
-        st.error(traceback.format_exc())
-        return pd.DataFrame()
-
-
-def procesar_texto_kunai_mejorado(texto: str) -> pd.DataFrame:
-    try:
-        if not texto or texto.isspace():
-            return pd.DataFrame()
-
-        lineas = [l.strip() for l in texto.splitlines()
-                    if l.strip() and not l.strip().startswith("Items por página") and l.strip().lower() != 'none']
-        indices_inicio = [i for i, linea in enumerate(lineas) if linea.startswith('Reparacion')]
-
-        columnas_kunai = [
-            'Trabajo', 'OrdenExterna', 'Cliente', 'Vence', 'OE_Creacion', 'OE_Vence',
-            'OE_Vencimiento', 'Prioridad', 'Tipo_de_prioridad', 'Calendarizada',
-            'Tanda_preferida', 'Reclamacion', 'Asignado_A', 'Compania', 'Supervisor',
-            'Pool', 'Estado', 'Tecnologia', 'Tipo_servicio', 'Organizacion', 'Sintoma',
-            'Creado', 'Tipo_Cliente', 'Segmento_Cliente', 'Ciudad', 'Sector', 'Barrio',
-            'Cabina', 'Terminal', 'Cantidad_de_lineas', 'Re_Digitada'
-        ]
-
-        all_records = []
-
-        for idx_reg, idx_start in enumerate(indices_inicio):
-            idx_end = indices_inicio[idx_reg + 1] if idx_reg + 1 < len(indices_inicio) else len(lineas)
-            campos_raw = lineas[idx_start:idx_end]
-
-            record = {col: '' for col in columnas_kunai}
-            campo_idx = 0
-
-            idx_hasta_barrio = columnas_kunai.index('Barrio')
-            i = 0
-            while i <= idx_hasta_barrio:
-                col_name = columnas_kunai[i]
-                if campo_idx >= len(campos_raw): break 
-
-                valor_actual = campos_raw[campo_idx]
-
-                posibles_tandas = ['Mañana', 'Tarde', 'Noche', 'Todo el día']
-                if col_name == 'Calendarizada' and valor_actual in posibles_tandas:
-                    record['Calendarizada'] = ''
-                    record['Tanda_preferida'] = valor_actual
-                    campo_idx += 1
-                    i += 1 
-                elif col_name == 'Tecnologia' and ('CFS' in valor_actual or 'Intern' in valor_actual):
-                    record['Tecnologia'] = ''
-                    record['Tipo_servicio'] = valor_actual
-                    campo_idx += 1
-                    i += 1 
-                else:
-                    record[col_name] = valor_actual
-                    campo_idx += 1
-                i += 1 
-
-            
-            campos_restantes = campos_raw[campo_idx:]
-            if campos_restantes:
-                if campos_restantes[-1] in ['Si', 'No']:
-                    record['Re_Digitada'] = campos_restantes.pop(-1)
-                if campos_restantes and str(campos_restantes[-1]).isdigit():
-                    record['Cantidad_de_lineas'] = campos_restantes.pop(-1)
-                if campos_restantes:
-                    record['Cabina'] = campos_restantes.pop(0)
-                if campos_restantes:
-                    record['Terminal'] = " ".join(campos_restantes)
-
-            if record['OrdenExterna'] and record['OrdenExterna'].replace(' ', '').isdigit():
-                all_records.append(record)
-
-        if not all_records:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(all_records).fillna('').replace('None', '')
-        df['OrdenExterna'] = df['OrdenExterna'].astype(str).str.strip()
-        df = df[df['OrdenExterna'].str.match(r'^\d{5,}$', na=False)]
-        df = df[df['Supervisor'].astype(str).str.strip() != '']
-        df = df.drop_duplicates(subset=['OrdenExterna'], keep='first').reset_index(drop=True)
-
-        if FILTRAR_POR_SUPERVISOR and 'Supervisor' in df.columns and not df.empty:
-            df_antes = len(df)
-            df = df[df['Supervisor'].isin(SUPERVISORES_PERMITIDOS)]
-            df_filtradas = df_antes - len(df)
-            if df_filtradas > 0 and df_antes > 0:
-                st.info(f"ℹ️ Se filtraron {df_filtradas} órdenes de otros supervisores.")
-
-        if not df.empty:
-            df['Timestamp_Procesado'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if supervisor_id_str:
+            nombre_a_mostrar = f"{nombre_base} / {supervisor_id_str}"
         else:
-            return pd.DataFrame()
-            
-        return df
-
-    except Exception as e:
-        st.error(f"Error Crítico al procesar los datos de KUNAI: {e}")
-        st.error(traceback.format_exc()) 
-        return pd.DataFrame()
-
-# ==============================================================================
-# --- FUNCIONES DE GUARDADO ---
-# ==============================================================================
-
-def guardar_snapshot_y_detectar_cambios(df_nuevo_snapshot: pd.DataFrame) -> tuple:
-    if df_nuevo_snapshot.empty: return 0, 0, True
-    try:
-        lote_actual = st.session_state.get('lote_actual', 0)
-        lote_para_guardar = lote_actual + 1
+            nombre_a_mostrar = nombre_base
         
-        is_supabase_empty = False
-        if engine:
-            try:
-                with engine.connect() as conn:
-                    result = conn.execute(text("SELECT 1 FROM historial_cambios LIMIT 1")).scalar()
-                    is_supabase_empty = result is None
-            except Exception as e:
-                st.warning(f"⚠️ No se pudo verificar estado de Supabase (historial_cambios): {e}.")
-                is_supabase_empty = True
-                
-        is_first_run_local = st.session_state.historial_cambios.empty
-        is_first_run = is_first_run_local and is_supabase_empty
+        st.sidebar.success(f"👤 **{nombre_a_mostrar}**")
 
-        eventos_para_historial = [] 
-        count_activos = 0 
-
-        if is_first_run:
-            df_cambios_inicial = df_nuevo_snapshot.copy()
-            df_cambios_inicial['Tipo_Evento'] = 'NUEVO'
-            df_cambios_inicial['Lote_Procesado'] = lote_para_guardar
-            eventos_para_historial = df_cambios_inicial.to_dict('records')
-        else:
-            historial_ultimo = pd.DataFrame()
-            if not st.session_state.historial_cambios.empty:
-                try:
-                    historial_ultimo = normalizar_timestamps(st.session_state.historial_cambios).sort_values('Timestamp_Procesado', ascending=False).drop_duplicates(subset=['OrdenExterna'], keep='first')
-                except Exception as e:
-                    st.error(f"Error procesando historial_cambios local: {e}")
-                    historial_ultimo = pd.DataFrame()
-
-            historial_idx = historial_ultimo.set_index('OrdenExterna') if not historial_ultimo.empty else pd.DataFrame()
-            
-            for _, fila_nueva in df_nuevo_snapshot.iterrows():
-                orden_id = fila_nueva['OrdenExterna']
-                fila_anterior = None
-                                
-                if not historial_idx.empty and orden_id in historial_idx.index:
-                    fila_anterior = historial_idx.loc[orden_id]
-
-                cambio_base = fila_nueva.to_dict()
-                cambio_base['Lote_Procesado'] = lote_para_guardar
-
-                if fila_anterior is not None:
-                    cols_comparar = [c for c in df_nuevo_snapshot.columns if c in fila_anterior.index and c not in COLUMNAS_IGNORAR_CAMBIOS]
-                    dict_nuevo = {c: str(fila_nueva.get(c, '')).strip() for c in cols_comparar}
-                    dict_anterior = {c: str(fila_anterior.get(c, '')).strip() for c in cols_comparar}
-
-                    if dict_nuevo != dict_anterior:
-                        cambio_base['Tipo_Evento'] = 'CAMBIO'
-                        eventos_para_historial.append(cambio_base.copy())
-                    else:
-                        cambio_base['Tipo_Evento'] = 'ACTIVO'
-                        count_activos += 1
-                        pass
-                else:
-                    cambio_base['Tipo_Evento'] = 'NUEVO'
-                    eventos_para_historial.append(cambio_base.copy())
-                
-        if eventos_para_historial:
-            df_eventos_historial = pd.DataFrame(eventos_para_historial)
-            st.session_state.historial_cambios = align_and_concat(
-                st.session_state.historial_cambios, df_eventos_historial
-            )
-            try:
-                df_para_csv_hist_ordenado = reordenar_dataframe_para_salida(st.session_state.historial_cambios)
-                df_para_csv_hist_ordenado.to_csv(ARCHIVO_HISTORIAL_CAMBIOS, sep=';', index=False)
-            except Exception as e:
-                st.warning(f"⚠️ Error guardando CSV {ARCHIVO_HISTORIAL_CAMBIOS}: {e}")
-            
-            if engine: 
-                try:
-                    df_sql_completo = normalizar_columnas_para_sql(df_eventos_historial.copy())
-                    with engine.begin() as conn:
-                        df_sql_completo.to_sql('historial_cambios', conn, if_exists='append', index=False, method='multi', chunksize=100)
-                except Exception as e: st.warning(f"⚠️ Error Supabase (historial_completo): {e}")
-
-        df_snapshot_guardar = df_nuevo_snapshot.copy()
-        if 'Lote_Procesado' in df_snapshot_guardar.columns:
-            df_snapshot_guardar = df_snapshot_guardar.drop(columns=['Lote_Procesado'])
-        
-        try:
-            df_snapshot_ordenado = reordenar_dataframe_para_salida(df_snapshot_guardar, es_snapshot=True)
-            df_snapshot_ordenado.to_csv(ARCHIVO_SNAPSHOT_HOY, sep=';', index=False)
-            st.session_state.snapshot_hoy = df_snapshot_ordenado 
-        except Exception as e:
-            st.warning(f"⚠️ Error guardando CSV {ARCHIVO_SNAPSHOT_HOY}: {e}")
-            st.session_state.snapshot_hoy = df_snapshot_guardar 
-
-        if engine: 
-            try:
-                with engine.begin() as conn:
-                    conn.execute(text("TRUNCATE TABLE snapshot_hoy;"))
-                    df_sql_snapshot = normalizar_columnas_para_sql(df_snapshot_guardar.copy())
-                    if 'lote_procesado' in df_sql_snapshot.columns: 
-                        df_sql_snapshot = df_sql_snapshot.drop(columns=['lote_procesado'])
-                    df_sql_snapshot.to_sql('snapshot_hoy', conn, if_exists='append', index=False, method='multi', chunksize=100)
-            except Exception as e: st.warning(f"⚠️ Error Supabase (snapshot): {e}")
-
-        st.session_state['lote_actual'] = lote_para_guardar
-        guardar_lote_actual(lote_para_guardar)
-        st.info(f"🔢 Lote de procesamiento incrementado a: {lote_para_guardar}")
-
-        return len(eventos_para_historial), count_activos, True 
-    except Exception as e:
-        st.error(f"Error fatal al guardar snapshot: {e}")
-        st.error(traceback.format_exc())
-        return 0, 0, False
-
-
-def guardar_en_historial_con_comparacion(df_nuevos: pd.DataFrame, tipo_evento: str) -> tuple:
-    if df_nuevos.empty: return 0, 0
-    try:
-        lote_actual = st.session_state.get('lote_actual', 1)
-        
-        cambios_para_completo = []
-        sin_cambios = 0
-        
-        h_idx = pd.DataFrame()
-        if not st.session_state.historial_cambios.empty:
-            try:
-                h_idx = normalizar_timestamps(st.session_state.historial_cambios).sort_values('Timestamp_Procesado', ascending=False).drop_duplicates(subset='OrdenExterna').set_index('OrdenExterna')
-            except Exception as e:
-                st.error(f"Error procesando historial local (P2/Mon): {e}")
-                h_idx = pd.DataFrame()
-
-        for _, fila_nueva in df_nuevos.iterrows():
-            orden_id = fila_nueva['OrdenExterna']
-            fila_h = None
-            
-            if not h_idx.empty and orden_id in h_idx.index:
-                fila_h = h_idx.loc[orden_id]
-            
-            cambio_base = fila_nueva.to_dict()
-            cambio_base['Tipo_Evento'] = tipo_evento
-            cambio_base['Lote_Procesado'] = lote_actual
-
-            hubo_cambio_real = False
-            if fila_h is not None:
-                cols_comp = [c for c in df_nuevos.columns if c in fila_h.index and c not in COLUMNAS_IGNORAR_CAMBIOS]
-                dict_nuevo = {c: str(fila_nueva.get(c, '')).strip() for c in cols_comp}
-                dict_hist = {c: str(fila_h.get(c, '')).strip() for c in cols_comp}
-                if dict_nuevo != dict_hist:
-                    hubo_cambio_real = True
-            else:
-                hubo_cambio_real = True
-            
-            if tipo_evento == 'ENCONTRADO':
-                hubo_cambio_real = True 
-
-            if hubo_cambio_real:
-                cambios_para_completo.append(cambio_base.copy())
-            else:
-                sin_cambios += 1
-        
-        if cambios_para_completo:
-            df_cambios_reales = pd.DataFrame(cambios_para_completo)
-            st.session_state.historial_cambios = align_and_concat(st.session_state.historial_cambios, df_cambios_reales)
-            try:
-                df_para_csv_hist_ordenado = reordenar_dataframe_para_salida(st.session_state.historial_cambios)
-                df_para_csv_hist_ordenado.to_csv(ARCHIVO_HISTORIAL_CAMBIOS, sep=';', index=False)
-            except Exception as e: st.warning(f"⚠️ Error CSV {ARCHIVO_HISTORIAL_CAMBIOS}: {e}")
-            if engine:
-                try:
-                    df_sql = normalizar_columnas_para_sql(df_cambios_reales.copy()) 
-                    with engine.begin() as conn:
-                        df_sql.to_sql('historial_cambios', conn, if_exists='append', index=False, method='multi', chunksize=100)
-                except Exception as e: st.warning(f"⚠️ Error Supabase (P2/Mon C): {e}")
-                
-        return len(cambios_para_completo), sin_cambios
-    except Exception as e:
-        st.error(f"Error fatal guardando (P2/Monitoreo): {e}")
-        st.error(traceback.format_exc())
-        return 0, 0
-
-def guardar_correccion_manual(df_correccion: pd.DataFrame) -> int:
-    if df_correccion.empty: return 0
-    try:
-        lote_actual = st.session_state.get('lote_actual', 1)
-        
-        cambios_para_completo = []
-        
-        for _, fila_nueva in df_correccion.iterrows():
-            cambio_base = fila_nueva.to_dict()
-            cambio_base['Lote_Procesado'] = lote_actual
-            cambios_para_completo.append(cambio_base.copy())
-        
-        if cambios_para_completo:
-            df_cambios_reales = pd.DataFrame(cambios_para_completo)
-            st.session_state.historial_cambios = align_and_concat(st.session_state.historial_cambios, df_cambios_reales)
-            try:
-                df_para_csv_hist_ordenado = reordenar_dataframe_para_salida(st.session_state.historial_cambios)
-                df_para_csv_hist_ordenado.to_csv(ARCHIVO_HISTORIAL_CAMBIOS, sep=';', index=False)
-            except Exception as e: st.warning(f"⚠️ Error CSV {ARCHIVO_HISTORIAL_CAMBIOS}: {e}")
-            if engine:
-                try:
-                    df_sql = normalizar_columnas_para_sql(df_cambios_reales.copy()) 
-                    with engine.begin() as conn:
-                        df_sql.to_sql('historial_cambios', conn, if_exists='append', index=False, method='multi', chunksize=100)
-                except Exception as e: st.warning(f"⚠️ Error Supabase (Corrección C): {e}")
-                
-        return len(cambios_para_completo)
-    except Exception as e:
-        st.error(f"Error fatal guardando corrección: {e}")
-        st.error(traceback.format_exc())
-        return 0
-
-# Mapeo de Supervisor (Nombre a ID)
-def mapear_tarjeta(supervisor_nombre):
-    """Función global para mapear nombre de supervisor a ID."""
-    if pd.isna(supervisor_nombre):
-        return None
-    nombre = str(supervisor_nombre).lower().strip()
-    
-    if nombre == 'aneudy peralta garcia': return '601378'
-    if nombre == 'evangelista nu?ez': return '61768' # Con ?
-    if nombre == 'evangelista nuñez': return '61768'  # Con ñ
-    if nombre == 'iven eduardo urbaez gonzalez': return '601665'
-    if nombre == 'jean carlos ramirez': return '601799'
-    
-    return None 
-
-# --- v2.9.0: Función de guardado genérica para tablas persistentes (Reabiertos, HC) ---
-def guardar_datos_persistentes(df_nuevos: pd.DataFrame, table_name: str, file_name: str, state_key: str, p_key: str = None) -> int:
-    """
-    Guarda datos en tablas persistentes (Supabase, CSV, session_state)
-    Solo para CARGA RÁPIDA (append).
-    """
-    if df_nuevos.empty: return 0
-    try:
-        df_nuevos_guardar = df_nuevos.copy()
-        
-        # 1. Guardar en Supabase (solo los nuevos)
-        if engine:
-            try:
-                with engine.begin() as conn:
-                    # Usamos 'append'. Si hay duplicados en PKEY (ej. tarjeta), Supabase dará error.
-                    # Para carga rápida, asumimos que el usuario maneja duplicados.
-                    # El CRUD manual usará 'ON CONFLICT'
-                    df_nuevos_guardar.to_sql(table_name, conn, if_exists='append', index=False, method='multi')
-            except Exception as e:
-                st.error(f"⚠️ Error Supabase (guardando en {table_name}): {e}")
-                st.info("Verifica si estás intentando insertar 'tarjetas' que ya existen.")
-                return 0 # No continuar si falla la BD
-
-        # 2. Actualizar session_state
-        # Usamos drop_duplicates si hay PKEY para mantener el estado limpio
-        df_actualizado = pd.concat(
-            [st.session_state[state_key], df_nuevos_guardar], 
-            ignore_index=True
-        )
-        
-        if p_key and p_key in df_actualizado.columns:
-            st.session_state[state_key] = df_actualizado.drop_duplicates(subset=[p_key], keep='last').reset_index(drop=True)
-        else:
-            st.session_state[state_key] = df_actualizado.drop_duplicates(keep='last').reset_index(drop=True)
-
-
-        # 3. Guardar en CSV (el estado completo)
-        try:
-            st.session_state[state_key].to_csv(file_name, sep=';', index=False)
-        except Exception as e:
-            st.warning(f"⚠️ Error guardando CSV {file_name}: {e}")
-        
-        return len(df_nuevos_guardar)
-    except Exception as e:
-        st.error(f"Error fatal guardando datos persistentes: {e}")
-        st.error(traceback.format_exc())
-        return 0
-
-# --- v2.9.0: Funciones para CRUD de Head Count ---
-def recargar_datos_persistentes(table_name: str, state_key: str):
-    """Recarga los datos de una tabla persistente desde Supabase a session_state."""
-    if not engine:
-        st.error("No hay conexión a Supabase para recargar.")
-        return
-    try:
-        # Excluir fecha_registro de la carga
-        inspector = inspect(engine)
-        cols = [col['name'] for col in inspector.get_columns(table_name)]
-        cols_to_select = [c for c in cols if c != 'fecha_registro']
-        
-        if not cols_to_select: # Fallback si no hay columnas
-             query = f"SELECT * FROM {table_name}"
-        else:
-             query = f"SELECT {', '.join(cols_to_select)} FROM {table_name}"
-             
-        df_cargado = pd.read_sql(query, engine)
-        st.session_state[state_key] = df_cargado.fillna('').replace('None', '')
-        
-        # Actualizar CSV de respaldo
-        st.session_state[state_key].to_csv(
-            ARCHIVO_HC_TECNICOS if state_key == 'head_count_tecnicos' else ARCHIVO_HC_SUPERVISORES,
-            sep=';',
-            index=False
-        )
-    except Exception as e:
-        st.error(f"Error al recargar {table_name}: {e}")
-
-def ejecutar_crud_sql(query: str, params: dict, success_msg: str):
-    """Ejecuta una operación CRUD (INSERT, UPDATE, DELETE) y maneja la respuesta."""
-    if not engine:
-        st.error("No hay conexión a Supabase para realizar la operación.")
-        return False
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(query), params)
-        st.success(success_msg)
+        if st.sidebar.button("🚪 Cerrar Sesión"):
+            keys_to_clear = ['logged_in', 'username', 'user_role', 'supervisor_id', 'nombre_supervisor']
+            for key in keys_to_clear:
+                st.session_state[key] = None if key != 'logged_in' else False
+            st.rerun()
         return True
-    except Exception as e:
-        st.error(f"Error en operación CRUD: {e}")
-        st.error(traceback.format_exc())
-        return False
-# --- Fin v2.9.0 ---
+# --- FIN DEL NUEVO SISTEMA DE LOGIN ---
 
 
-def convertir_a_excel(df, es_snapshot=False):
-    output = io.BytesIO()
-    if df.empty:
-        return None
+if not verificar_login():
+    st.stop()
+
+# --------------------------
+# Auto-refresh
+# --------------------------
+st_autorefresh(interval=30 * 1000, key="data_refresh")
+
+
+# -----------------------------------------------
+# --- FUNCIÓN DE AYUDA (v2.7.0) ---
+# -----------------------------------------------
+def get_current_ast_time():
+    """
+    Devuelve la hora actual en AST (UTC-4) como un objeto datetime naive.
+    """
     try:
-        df_ordenado = reordenar_dataframe_para_salida(df, es_snapshot=es_snapshot)
+        ahora_utc = datetime.utcnow()
+        zona_horaria_offset = timedelta(hours=-4)
+        ahora_ast = ahora_utc + zona_horaria_offset
+        return ahora_ast.replace(tzinfo=None) # Devuelve naive
+    except Exception as e:
+        return datetime.now() 
 
-        with pd.ExcelWriter(output, engine='openpyxl', datetime_format='YYYY-MM-DD HH:MM:SS') as writer:
-            df_copy = df_ordenado.copy() 
-            if 'Lote_Procesado' in df_copy.columns:
-                df_copy['Lote_Procesado'] = pd.to_numeric(df_copy['Lote_Procesado'], errors='coerce').fillna(0).astype(int)
-            df_copy.to_excel(writer, index=False, sheet_name='KUNAI_Datos')
+# --------------------------
+# Funciones de Cálculo
+# --------------------------
+def calcular_pyme_y_vence(fecha_creacion):
+    if pd.isna(fecha_creacion): return False, None
+    ahora_naive = get_current_ast_time()
+    hoy = ahora_naive.date()
+    ayer = hoy - timedelta(days=1)
+    if not isinstance(fecha_creacion, pd.Timestamp):
+        fecha_creacion = pd.to_datetime(fecha_creacion, errors='coerce')
+        if pd.isna(fecha_creacion): return False, None
+    fecha = fecha_creacion.date()
+    hora = fecha_creacion.time()
+    if fecha == hoy:
+        return True, fecha_creacion + timedelta(hours=4)
+    if fecha == ayer and hora >= time(18, 0):
+        return True, datetime.combine(hoy, time(12, 0))
+    return False, None
 
+def calcular_vencido(row):
+    vence_en_dt = pd.to_datetime(row.get('Vence en'), errors='coerce')
+    estado = str(row.get('Estado','')).lower()
+    
+    # Si no tiene fecha de vencimiento, no puede estar vencido.
+    if pd.isna(vence_en_dt):
+        return False
+
+    # Convertir 'Vence en' a naive
+    vence_en_naive = vence_en_dt.tz_convert(None) if hasattr(vence_en_dt, 'tzinfo') and vence_en_dt.tzinfo is not None else vence_en_dt.replace(tzinfo=None)
+
+    # --- INICIO DE LA LÓGICA CORREGIDA ---
+    
+    # CASO 1: El ticket está PENDIENTE ('activo' o 'iniciado')
+    if estado in ['activo', 'iniciado']:
+        # Lógica dinámica: Comparamos con la hora actual
+        ahora_naive = get_current_ast_time()
+        try:
+            return ahora_naive > vence_en_naive
+        except TypeError:
+            return False
+    
+    # CASO 2: El ticket está CERRADO o en cualquier otro estado final
+    else:
+        # Lógica "congelada": Comparamos el timestamp del snapshot (cierre) con la hora de vencimiento
+        timestamp_evento = pd.to_datetime(row.get('Timestamp_Procesado'), errors='coerce')
+        
+        # Si no podemos saber cuándo se cerró, asumimos que no está vencido
+        if pd.isna(timestamp_evento):
+            return False
+            
+        # Convertir timestamp_evento a naive
+        evento_naive = timestamp_evento.tz_convert(None) if hasattr(timestamp_evento, 'tzinfo') and timestamp_evento.tzinfo is not None else timestamp_evento.replace(tzinfo=None)
+        
+        try:
+            # ¿Se detectó el cierre DESPUÉS de la hora de vencimiento?
+            return evento_naive > vence_en_naive
+        except TypeError:
+            return False
+    # --- FIN DE LA LÓGICA CORREGIDA ---
+
+@st.cache_data(ttl=300)
+def get_earliest_batch_initial_cohort(df_full_historial):
+    if (df_full_historial is None or df_full_historial.empty or
+        'OrdenExterna' not in df_full_historial.columns or
+        'Estado' not in df_full_historial.columns or
+        'lote_procesado' not in df_full_historial.columns or
+        'Timestamp_Procesado' not in df_full_historial.columns or 
+        not pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado'])
+        ):
+        return set()
+    try:
+        ahora_ast_naive = get_current_ast_time()
+        fecha_hoy = ahora_ast_naive.date()
+        df_historial_hoy = df_full_historial[df_full_historial['Timestamp_Procesado'].dt.date == fecha_hoy].copy()
+        if df_historial_hoy.empty:
+            return set()
+        lotes_numericos = pd.to_numeric(df_historial_hoy['lote_procesado'], errors='coerce')
+        if lotes_numericos.isna().all():
+            return set()
+        min_lote = lotes_numericos.min()
+        if pd.isna(min_lote):
+            return set()
+        df_earliest_batch = df_historial_hoy[lotes_numericos == min_lote].copy()
+        if df_earliest_batch.empty:
+            return set()
+        df_initial_active_in_snapshot = df_earliest_batch[
+            df_earliest_batch['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+        ]
+        initial_cohort_ids = set(df_initial_active_in_snapshot['OrdenExterna'].unique())
+        return initial_cohort_ids
+    except Exception as e:
+        st.error(f"Error en get_earliest_batch_initial_cohort: {e}")
+        return set()
+
+# ***** FUNCIÓN MODIFICADA *****
+def calcular_kpis(df, df_full_historial):
+    default_kpis = {
+            'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
+            'Rebote': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
+            'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0,
+            'Pymes_Vencidos': 0, 'Pymes_Cerrados_en_Tiempo': 0 # <-- Valores por defecto
+        }
+    if df is None or df.empty or 'Estado' not in df.columns or 'OrdenExterna' not in df.columns:
+        return default_kpis
+    
+    df_kpi = df.copy()
+    df_kpi['Estado'] = df_kpi['Estado'].fillna('desconocido').astype(str).str.lower()
+    
+    total = len(df_kpi)
+    cerrados = df_kpi[df_kpi['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
+    referidos = df_kpi[df_kpi['Estado'] == 'pend trab interno'].shape[0]
+    citados = df_kpi[df_kpi['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
+    rebote = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0]
+    pendientes = df_kpi[df_kpi['Estado'].isin(['activo', 'iniciado'])].shape[0]
+    manejados = cerrados + referidos + citados + rebote
+    
+    eficiencia_total = round(manejados * 100 / total, 1) if total > 0 else 0.0
+    
+    total_iniciado_en_pagina = 0
+    manejados_inicial_en_pagina = 0
+    eficiencia_inicial = 0.0
+    
+    global_initial_cohort_ids = get_earliest_batch_initial_cohort(df_full_historial)
+    
+    if global_initial_cohort_ids:
+        try:
+            tickets_en_pagina_actual_ids = set(df_kpi['OrdenExterna'].unique())
+            cohort_tickets_in_current_page_ids = global_initial_cohort_ids.intersection(tickets_en_pagina_actual_ids)
+            total_iniciado_en_pagina = len(cohort_tickets_in_current_page_ids)
+            
+            if total_iniciado_en_pagina > 0:
+                df_kpi_del_cohort_intersectado = df_kpi[df_kpi['OrdenExterna'].isin(cohort_tickets_in_current_page_ids)]
+                cerrados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
+                referidos_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'pend trab interno'].shape[0]
+                citados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
+                rebote_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'validacion int'].shape[0]
+                manejados_inicial_en_pagina = cerrados_inicial + referidos_inicial + citados_inicial + rebote_inicial
+                eficiencia_inicial = round(manejados_inicial_en_pagina * 100 / total_iniciado_en_pagina, 1)
+        except Exception as e:
+            st.error(f"Error calculando KPIs iniciales: {e}")
+            total_iniciado_en_pagina = 0
+            manejados_inicial_en_pagina = 0
+            eficiencia_inicial = 0.0
+
+    # --- ¡NUEVO! CÁLCULOS ESPECÍFICOS DE PYME ---
+    pymes_vencidos = 0
+    pymes_cerrados_en_tiempo = 0
+
+    if 'Vencido' in df_kpi.columns:
+        # Asegurar que 'Vencido' es booleano (ya debería estarlo por cargar_datos)
+        df_kpi['Vencido'] = df_kpi['Vencido'].fillna(False).astype(bool)
+        
+        # --- ¡ESTA ES LA LÍNEA CORREGIDA! ---
+        # 1. Contar Pymes Vencidas (Solo las que están PENDIENTES Y VENCIDAS)
+        pendientes_mask = df_kpi['Estado'].isin(['activo', 'iniciado'])
+        vencido_mask = df_kpi['Vencido'] == True
+        pymes_vencidos = df_kpi[pendientes_mask & vencido_mask].shape[0]
+        # --- FIN DE LA CORRECCIÓN ---
+        
+        # 2. Contar Pymes Cerradas en Tiempo
+        cerrados_mask = df_kpi['Estado'].isin(['cerrado', 'validacion ext'])
+        en_tiempo_mask = df_kpi['Vencido'] == False
+        pymes_cerrados_en_tiempo = df_kpi[cerrados_mask & en_tiempo_mask].shape[0]
+    # --- FIN DE NUEVOS CÁLCULOS ---
+
+    return {
+        'Total': total, 'Cerrados': cerrados, 'Referidos': referidos, 'Citados': citados,
+        'Rebote': rebote, 'Pendientes': pendientes, 'Manejados': manejados,
+        'Eficiencia_Total_%': eficiencia_total, 'Total_Iniciado': total_iniciado_en_pagina, 
+        'Manejados_Inicial': manejados_inicial_en_pagina, 'Eficiencia_Inicial': eficiencia_inicial,
+        # --- ¡NUEVAS KPIS AÑADIDAS AL RETORNO! ---
+        'Pymes_Vencidos': pymes_vencidos,
+        'Pymes_Cerrados_en_Tiempo': pymes_cerrados_en_tiempo
+    }
+# --- End of KPI Calculation Function ---
+
+
+# --- NUEVA FUNCIÓN DE ANÁLISIS v2.7.3 ---
+@st.cache_data(ttl=60)
+def analizar_reabiertos(_df_historial, _df_reabiertos):
+    """
+    Compara reabiertos['caso'] con historial['OrdenExterna'] que estén 'activo' o 'iniciado'.
+    """
+    if _df_historial is None or _df_historial.empty or _df_reabiertos is None or _df_reabiertos.empty:
+        return pd.DataFrame()
+
+    try:
+        # 1. Obtener el último estado de TODOS los tickets del historial
+        df_historial_unicos = obtener_datos_unicos(_df_historial)
+        if df_historial_unicos.empty:
+            return pd.DataFrame()
+
+        # 2. Filtrar el historial por 'activo' e 'iniciado'
+        estados_activos = ['activo', 'iniciado']
+        df_activos_iniciados = df_historial_unicos[
+            df_historial_unicos['Estado'].astype(str).str.lower().isin(estados_activos)
+        ]
+        
+        if df_activos_iniciados.empty:
+            return pd.DataFrame() # No hay tickets activos, por lo tanto no hay coincidencias
+
+        # 3. Obtener el set de IDs para una búsqueda rápida
+        activos_iniciados_ids = set(df_activos_iniciados['OrdenExterna'])
+        
+        # 4. Encontrar las coincidencias en la tabla 'reabiertos'
+        #    Comparamos la columna 'caso' de reabiertos con el set de 'OrdenExterna'
+        df_coincidencias = _df_reabiertos[
+            _df_reabiertos['caso'].isin(activos_iniciados_ids)
+        ].copy()
+
+        if df_coincidencias.empty:
+            return pd.DataFrame()
+
+        # 5. Ordenar por 'fecha' (la función de carga ya la convirtió a datetime)
+        if 'fecha' in df_coincidencias.columns and pd.api.types.is_datetime64_any_dtype(df_coincidencias['fecha']):
+            df_coincidencias = df_coincidencias.sort_values('fecha', ascending=False)
+        
+        return df_coincidencias
+    except Exception as e:
+        st.error(f"Error en analizar_reabiertos: {e}")
+        st.error(traceback.format_exc())
+        return pd.DataFrame()
+# --- FIN DE LA NUEVA FUNCIÓN ---
+
+
+# --- Mapeo y Carga de Datos (Sin Cambios) ---
+def get_column_mappings():
+    reverse_mapping = {
+        'trabajo': 'Trabajo', 'orden_externa': 'OrdenExterna', 'cliente': 'Cliente', 'vence': 'Vence',
+        'oe_creacion': 'OE_Creacion', 'oe_vence': 'OE_Vence', 'oe_vencimiento': 'OE_Vencimiento',
+        'prioridad': 'Prioridad', 'tipo_de_prioridad': 'Tipo_de_prioridad', 'calendarizada': 'Calendarizada',
+        'tanda_preferida': 'Tanda_preferida', 'reclamacion': 'Reclamacion', 'asignado_a': 'Asignado_A',
+        'compania': 'Compania', 'supervisor': 'Supervisor', 'pool': 'Pool', 'estado': 'Estado',
+        'tecnologia': 'Tecnologia', 'tipo_servicio': 'Tipo_servicio', 'organizacion': 'Organizacion',
+        'sintoma': 'Sintoma', 'creado': 'Creado', 'tipo_cliente': 'Tipo_Cliente', 'segmento_cliente': 'Segmento_Cliente',
+        'ciudad': 'Ciudad', 'sector': 'Sector', 'barrio': 'Barrio', 'cabina': 'Cabina', 'terminal': 'Terminal',
+        'cantidad_de_lineas': 'Cantidad_de_lineas', 're_digitada': 'Re_Digitada', 'timestamp_procesado': 'Timestamp_Procesado',
+        'fuente_paso': 'Fuente_Paso', 'tipo_evento': 'Tipo_Evento',
+        'lote_procesado': 'lote_procesado',
+        'id': None, 'fecha_actualizacion': None, 'fecha_registro': None
+    }
+    return reverse_mapping
+
+COLUMN_MAPPING_REVERSE = get_column_mappings()
+
+def denormalizar_columnas_desde_sql(df_sql):
+    if df_sql is None or df_sql.empty:
+        return df_sql
+    mapeo_valido = {k: v for k, v in COLUMN_MAPPING_REVERSE.items() if v is not None}
+    columnas_a_renombrar = {k: v for k, v in mapeo_valido.items() if k in df_sql.columns}
+    df_csv = df_sql.rename(columns=columnas_a_renombrar)
+    columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
+    return df_csv[columnas_esperadas_presentes]
+
+@st.cache_data(ttl=60)
+def cargar_datos():
+    engine = get_database_engine()
+    if engine is None:
+        st.error("No hay conexión a la base de datos.")
+        return pd.DataFrame()
+    try:
+        query = text("SELECT * FROM historial_cambios") 
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        if df_sql.empty:
+            st.warning("La tabla 'historial_cambios' está vacía.")
+            return pd.DataFrame()
+        df = denormalizar_columnas_desde_sql(df_sql)
+        if df.empty:
+            st.error("Error al mapear columnas de Supabase.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ Error al cargar datos desde Supabase: {e}")
+        return pd.DataFrame()
+    df.columns = df.columns.str.strip()
+    columnas_texto_clave = ['Supervisor', 'Estado', 'Tipo_Cliente', 'Tipo_servicio', 'Asignado_A', 'Prioridad']
+    for col in df.columns.intersection(columnas_texto_clave):
+        df[col] = df[col].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+    columnas_fechas_a_procesar = ['Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Timestamp_Procesado']
+    for col in df.columns.intersection(columnas_fechas_a_procesar):
+        df[f'{col}_Original'] = df[col].astype(str).replace('NaT', None)
+        df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True, format='mixed')
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            try:
+                if df[col].dt.tz is not None:
+                        df[col] = df[col].dt.tz_convert('Etc/GMT+4').dt.tz_localize(None)
+                else:
+                        df[col] = df[col].dt.tz_localize('Etc/GMT+4', ambiguous='infer').dt.tz_localize(None)
+            except Exception:
+                df[col] = df[col].dt.tz_localize(None)
+    if 'OE_Creacion' in df.columns and pd.api.types.is_datetime64_any_dtype(df['OE_Creacion']) and not df['OE_Creacion'].isna().all():
+        mask_valid_oe = df['OE_Creacion'].notna()
+        if mask_valid_oe.any():
+            pyme_info = df.loc[mask_valid_oe, 'OE_Creacion'].apply(lambda x: pd.Series(calcular_pyme_y_vence(x), index=['PYME', 'Vence en']))
+            df.loc[mask_valid_oe, ['PYME', 'Vence en']] = pyme_info.values
+            df['Vence en'] = pd.to_datetime(df['Vence en'], errors='coerce')
+            mask_valid_vence = df['Vence en'].notna()
+            if mask_valid_vence.any():
+                df.loc[mask_valid_vence, 'Vencido'] = df[mask_valid_vence].apply(calcular_vencido, axis=1).astype(bool)
+            es_negocio = df.get('Tipo_Cliente', pd.Series(dtype=str)) == 'negocio'
+            df['PYME'] = df['PYME'].fillna(False).astype(bool)
+            df['Es_PYME_Negocio'] = df['PYME'] & es_negocio
+        else:
+            df['PYME'] = False; df['Vence en'] = pd.NaT; df['Vencido'] = False; df['Es_PYME_Negocio'] = False
+    else:
+        df['PYME'] = False; df['Vence en'] = pd.NaT; df['Vencido'] = False; df['Es_PYME_Negocio'] = False
+    if 'Vencido' not in df.columns:
+        df['Vencido'] = False
+    else:
+        df['Vencido'] = df['Vencido'].fillna(False).astype(bool)
+    return df
+# --- FIN DE LA LÓGICA DE CARGA ---
+
+
+# --- NUEVA FUNCIÓN DE CARGA v2.7.4 (CORREGIDA) ---
+@st.cache_data(ttl=60)
+def cargar_datos_reabiertos():
+    """Carga la tabla 'reabiertos' de Supabase."""
+    engine = get_database_engine()
+    if engine is None:
+        st.error("No hay conexión a la base de datos.")
+        return pd.DataFrame()
+    try:
+        query = text("SELECT * FROM reabiertos")
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        
+        if df_sql.empty:
+            st.warning("La tabla 'reabiertos' está vacía.")
+            return pd.DataFrame()
+        
+        # Procesar columnas clave para filtros y orden
+        if 'fecha' in df_sql.columns:
+            df_sql['fecha'] = pd.to_datetime(df_sql['fecha'], errors='coerce', dayfirst=True, format='mixed')
+        
+        # Normalizamos las columnas de supervisor para los filtros
+        if 'supervisor' in df_sql.columns:
+            df_sql['supervisor'] = df_sql['supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+        
+        # CORRECCIÓN: Normalizar la nueva columna también (en minúscula)
+        if 'tarjeta_supervisor' in df_sql.columns:
+            df_sql['tarjeta_supervisor'] = df_sql['tarjeta_supervisor'].astype(str).str.strip().str.lower().replace('nan', None).replace('<na>', None).replace('none', None)
+        else:
+            # Si la columna AÚN no existe (por si el KUNAI script no ha corrido)
+            # La creamos vacía para evitar que el script del dashboard falle.
+            st.warning("Columna 'tarjeta_supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará hasta que se ejecute el script KUNAI v2.7.9.")
+            df_sql['tarjeta_supervisor'] = None
+
+        return df_sql
+    except Exception as e:
+        # Si el error es "column 'tarjeta_supervisor' does not exist", creamos un df vacío
+        if "tarjeta_supervisor" in str(e).lower() and "does not exist" in str(e).lower():
+             st.warning("Columna 'tarjeta_supervisor' aún no existe en 'reabiertos'. Ejecuta el script KUNAI v2.7.9 para arreglarlo.")
+             return pd.DataFrame() # Devuelve vacío si la columna no existe
+        st.error(f"❌ Error al cargar datos desde 'reabiertos': {e}")
+        return pd.DataFrame()
+# --- FIN DE LA NUEVA FUNCIÓN ---
+
+# --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE SUPERVISOR ---
+@st.cache_data(ttl=3600) # Cache de 1 hora, los nombres no cambian mucho
+def cargar_head_count_supervisor():
+    """Carga la tabla 'head_count_supervisor' de Supabase."""
+    engine = get_database_engine()
+    if engine is None:
+        st.error("No hay conexión a la base de datos.")
+        return pd.DataFrame()
+    try:
+        query = text("SELECT * FROM head_count_supervisor")
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        
+        if df_sql.empty:
+            st.warning("La tabla 'head_count_supervisor' está vacía o no existe.")
+            return pd.DataFrame()
+        
+        # Normalizar la columna 'Tarjeta' para el merge
+        if 'tarjeta' in df_sql.columns:
+            # Aseguramos que sea string y minúscula, igual que la columna Supervisor
+            df_sql['tarjeta'] = df_sql['tarjeta'].astype(str).str.strip().str.lower()
+        else:
+            st.error("La tabla 'head_count_supervisor' no tiene la columna 'Tarjeta'.")
+            return pd.DataFrame()
+            
+        if 'nombre' not in df_sql.columns:
+            st.error("La tabla 'head_count_supervisor' no tiene la columna 'nombre'.")
+            return pd.DataFrame()
+
+        # Devolvemos solo las columnas necesarias
+        return df_sql[['tarjeta', 'nombre']]
+    except Exception as e:
+        # Si la tabla no existe, devolvemos un DF vacío pero no paramos el script
+        if "does not exist" in str(e).lower():
+             st.warning("La tabla 'head_count_supervisor' no existe. No se mostrarán los nombres.")
+             return pd.DataFrame()
+        st.error(f"❌ Error al cargar datos desde 'head_count_supervisor': {e}")
+        return pd.DataFrame()
+# --- FIN DE LA NUEVA FUNCIÓN ---
+
+# ==============================================================================
+# --- LÓGICA PRINCIPAL (v2.7.1) ---
+# ==============================================================================
+df_full_historial = cargar_datos()
+df_reabiertos_full = cargar_datos_reabiertos()
+df_head_count = cargar_head_count_supervisor() # <-- NUEVA LÍNEA v2.7.3
+
+# ***** INICIO CAMBIO v2.7.5: Crear set de reabiertos para resaltar *****
+if df_reabiertos_full is not None and not df_reabiertos_full.empty and 'caso' in df_reabiertos_full.columns:
+    # Creamos un set (lista rápida) de todos los 'caso' en reabiertos
+    set_casos_reabiertos = set(df_reabiertos_full['caso'].dropna().astype(str))
+else:
+    set_casos_reabiertos = set() # Vacío si no hay datos
+# ***** FIN CAMBIO v2.7.5 *****
+
+
+if df_full_historial is None or df_full_historial.empty:
+    st.error("No se pudieron cargar datos. Verifica la conexión a Supabase y que la tabla 'historial_cambios' no esté vacía.")
+    st.stop()
+else:
+    try:
+        fecha_hoy = get_current_ast_time().date()
+        if 'Timestamp_Procesado' in df_full_historial.columns and \
+            pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado']) and \
+            'OrdenExterna' in df_full_historial.columns:
+            df_full_historial['Fecha_Nacimiento'] = df_full_historial.groupby('OrdenExterna')['Timestamp_Procesado'].transform('min')
+            df = df_full_historial[df_full_historial['Fecha_Nacimiento'].dt.date == fecha_hoy].copy()
+            if df.empty:
+                st.info(f"ℹ️ No hay tickets **nuevos** registrados en el día de hoy ({fecha_hoy.strftime('%d/%m/%Y')}).")
+        else:
+            st.error("Columnas 'Timestamp_Procesado' u 'OrdenExterna' son inválidas. No se puede filtrar por 'Nuevos Hoy'.")
+            df = pd.DataFrame(columns=df_full_historial.columns)
+    except Exception as e:
+        st.error(f"Error fatal al filtrar por 'Nuevos Hoy': {e}")
+        st.error(traceback.format_exc())
+        df = pd.DataFrame(columns=df_full_historial.columns)
+# --- FIN DE LA LÓGICA "NUEVOS HOY" ---
+        
+# ==============================================================================
+
+# -----------------------------------------------
+# Funciones para obtener y formatear datos
+# -----------------------------------------------
+def obtener_datos_unicos(df_input):
+    if df_input is None or df_input.empty:
+        return df_input
+    if 'OrdenExterna' not in df_input.columns:
+        st.error("Columna 'OrdenExterna' no encontrada.")
+        return pd.DataFrame(columns=df_input.columns)
+    ts_col_valid = ('Timestamp_Procesado' in df_input.columns and
+                    pd.api.types.is_datetime64_any_dtype(df_input['Timestamp_Procesado']) and
+                    not df_input['Timestamp_Procesado'].isna().all())
+    if not ts_col_valid:
+        df_temp = df_input.dropna(subset=['OrdenExterna'])
+        result = df_temp.drop_duplicates(subset=['OrdenExterna'], keep='first')
+        return result
+    else:
+        df_temp = df_input.dropna(subset=['OrdenExterna', 'Timestamp_Procesado'])
+        df_sorted = df_temp.sort_values('Timestamp_Procesado', ascending=False)
+        result = df_sorted.drop_duplicates(subset=['OrdenExterna'], keep='first')
+        return result
+
+def formatear_para_display(df_input):
+    if df_input is None or df_input.empty:
+        return df_input
+    df_display = df_input.copy()
+    
+    # --- INICIO CAMBIO v2.7.3: Añadir 'fecha' ---
+    columnas_fechas_a_procesar = [
+        'Creado', 'OE_Creacion', 'OE_Vence', 'OE_Vencimiento', 'Vence', 'Vence en', 
+        'Timestamp_Procesado', 'fecha_registro', 'Fecha_Nacimiento', 'fecha'
+    ]
+    # --- FIN CAMBIO v2.7.3 ---
+    
+    columnas_fechas_presentes = df_display.columns.intersection(columnas_fechas_a_procesar)
+    for col in columnas_fechas_presentes:
+        if pd.api.types.is_datetime64_any_dtype(df_display[col]) and not df_display[col].isna().all():
+            try:
+                df_display[col] = df_display[col].apply(lambda x: x.strftime('%d/%m/%Y %H:%M') if pd.notna(x) else None)
+            except Exception:
+                df_display[col] = df_display[col].astype(str).replace('NaT', None)
+        else:
+            df_display[col] = df_display[col].astype(str).replace('nan', None).replace('NaT', None).replace('<NA>', None).replace('None',None)
+    
+    for col in df_display.columns:
+        if col not in columnas_fechas_presentes:
+            try:
+                if col == 'Vencido' and df_display[col].dtype == 'bool':
+                    df_display[col] = df_display[col].map({True: 'Sí', False: 'No'}).fillna('No')
+                else:
+                    df_display[col] = df_display[col].astype(str).replace('nan', None).replace('<NA>', None).replace('None', None)
+            except Exception:
+                df_display[col] = None
+    return df_display
+
+def to_excel(df: pd.DataFrame):
+    if df is None or df.empty:
+        return None
+    output = BytesIO()
+    try:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # Aplicamos el formateo de texto antes de guardar
+            df_formateada = formatear_para_display(df.copy())
+            if 'Eficiencia_Total_%' in df_formateada.columns:
+                df_formateada['Eficiencia_Total_%'] = pd.to_numeric(df_formateada['Eficiencia_Total_%'], errors='coerce').round(1)
+            df_formateada.to_excel(writer, index=False, sheet_name='Datos')
         processed_data = output.getvalue()
         return processed_data
     except Exception as e:
-        st.error(f"Error al convertir a Excel: {e}")
-        try: 
-            output = io.BytesIO()
-            df_ordenado_texto = reordenar_dataframe_para_salida(df, es_snapshot=es_snapshot).astype(str) 
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_ordenado_texto.to_excel(writer, index=False, sheet_name='KUNAI_Datos')
-            processed_data = output.getvalue()
-            st.warning("⚠️ Exportado a Excel como texto debido a error de tipo.")
-            return processed_data
-        except Exception as e2:
-            st.error(f"Error crítico al convertir a Excel (texto): {e2}")
-            return None
-
-def convertir_a_excel_simple(df):
-    """Convierte un DataFrame simple a Excel sin lógica de reordenamiento."""
-    output = io.BytesIO()
-    if df.empty: 
+        st.error(f"Error al generar el archivo Excel: {e}")
         return None
+
+def aplicar_estilo_resumen_tecnico(row):
+    styles = pd.Series('', index=row.index)
+    if row.iloc[0] == 'TOTAL':
+        return styles
     try:
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Datos')
-        return output.getvalue()
+        total = int(row['Total'])
+        total_manejado = int(row['Total Manejado'])
+    except (ValueError, TypeError):
+        return styles
+    color_style = ''
+    if total > 7:
+        if total_manejado < 7:
+            color_style = 'background-color: #ffcccc; color: #a60000;' # Rojo
+        elif total_manejado >= 7:
+            color_style = 'background-color: #ccffcc; color: #006400;' # Verde
+    elif total <= 7 and total > 0:
+        if total_manejado == total:
+            color_style = 'background-color: #ccffcc; color: #006400;' # Verde
+        elif total_manejado < total:
+            color_style = 'background-color: #ffcccc; color: #a60000;' # Rojo
+    if color_style:
+        styles['Total Manejado'] = color_style
+    return styles
+
+# --- ¡FUNCIÓN MODIFICADA! ---
+# --- ¡FUNCIÓN MODIFICADA! ---
+# --- ¡FUNCIÓN MODIFICADA! ---
+# --- ¡FUNCIÓN MODIFICADA! ---
+def crear_resumen_admin(df, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
+    # --- MODIFICADO: Definición de columnas base (sin 'nombre' todavía) ---
+    cols_base = [
+        agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+        'Pendientes', 'Total Manejado'
+    ]
+    
+    # --- Añadir columnas PYME solo si es la página de PYME ---
+    if es_pyme_page:
+        cols = cols_base + ['Cerrados en Tiempo', 'Vencidos', 'Eficiencia_Total_%']
+    else:
+        cols = cols_base + ['Eficiencia_Total_%']
+
+    
+    if df is None or df.empty:
+        # Columna 'nombre' ya no se añade aquí
+        return pd.DataFrame(columns=cols)
+    
+    if agrupar_por not in df.columns or 'OrdenExterna' not in df.columns or 'Estado' not in df.columns:
+        st.warning(f"Faltan columnas esenciales para crear el resumen.")
+        return pd.DataFrame(columns=cols)
+        
+    df_copy = df.copy()
+    df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str).str.lower()
+    df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
+
+    # --- Lógica Pyme (sin cambios) ---
+    if es_pyme_page and 'Vencido' in df_copy.columns:
+        df_copy['Vencido'] = df_copy['Vencido'].fillna(False).astype(bool)
+        pendientes_mask = df_copy['Estado'].isin(['activo', 'iniciado'])
+        vencido_mask = df_copy['Vencido'] == True
+        df_copy['Es_Vencido'] = pendientes_mask & vencido_mask
+        df_copy['Es_Cerrado_Tiempo'] = df_copy['Estado'].isin(['cerrado', 'validacion ext']) & (df_copy['Vencido'] == False)
+    else:
+        df_copy['Es_Vencido'] = False
+        df_copy['Es_Cerrado_Tiempo'] = False
+
+    # --- Lógica de Puntualidad (sin cambios) ---
+    estados_citados = ['pendiente de calendarizacion', 'calendarizado']
+    
+    # Pre-calcular las categorías (sin cambios)
+    agg_dict_base = {
+        'Cerrados': ('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
+        'Referidos': ('Estado', lambda x: (x == 'pend trab interno').sum()),
+        'Citados': ('Estado', lambda x: x.isin(estados_citados).sum()),
+        'Rebote': ('Estado', lambda x: (x == 'validacion int').sum()),
+        'Pendientes': ('Estado', lambda x: x.isin(['activo', 'iniciado']).sum())
+    }
+    
+    if es_puntualidad_page:
+        agg_dict_base['Total'] = ('Estado', lambda x: (~x.isin(estados_citados)).sum())
+    else:
+        agg_dict_base['Total'] = ('OrdenExterna', 'count')
+
+    if es_pyme_page:
+        agg_dict_base['Vencidos'] = ('Es_Vencido', 'sum')
+        agg_dict_base['Cerrados en Tiempo'] = ('Es_Cerrado_Tiempo', 'sum')
+
+    # Calcular el resumen con TODOS los datos
+    resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
+
+    # --- ¡BLOQUE DE MERGE MODIFICADO! ---
+    if agrupar_por == 'Supervisor' and df_head_count is not None and not df_head_count.empty:
+        try:
+            # 1. Guardar el ID original para el merge
+            resumen['supervisor_id_merge_key'] = resumen[agrupar_por].astype(str).str.lower()
+            
+            resumen = pd.merge(
+                resumen,
+                df_head_count, # Esta tabla ya tiene 'tarjeta' normalizada
+                left_on='supervisor_id_merge_key', 
+                right_on='tarjeta',
+                how='left'
+            )
+            resumen.drop(columns=['tarjeta', 'supervisor_id_merge_key'], inplace=True, errors='ignore') 
+            
+            # 2. Llenar NAs y capitalizar nombres
+            resumen['nombre'] = resumen['nombre'].fillna('Nombre no encontrado').astype(str).str.title()
+            
+            # 3. Crear la columna combinada
+            #    'agrupar_por' (Supervisor) todavía contiene el ID (ej. 601665)
+            resumen['Supervisor_Combinado'] = resumen['nombre'] + " (" + resumen[agrupar_por].astype(str) + ")"
+            
+            # 4. Corregir los que no se encontraron
+            mask_no_encontrado = resumen['nombre'] == 'Nombre No Encontrado' # .title() lo capitalizó
+            resumen.loc[mask_no_encontrado, 'Supervisor_Combinado'] = resumen.loc[mask_no_encontrado, agrupar_por]
+            
+            # 5. Eliminar la columna 'Supervisor' (ID) original y 'nombre'
+            resumen.drop(columns=[agrupar_por, 'nombre'], inplace=True)
+            
+            # 6. Renombrar la nueva columna combinada de nuevo a 'Supervisor'
+            resumen.rename(columns={'Supervisor_Combinado': agrupar_por}, inplace=True)
+            
+        except Exception as e:
+            st.warning(f"No se pudo hacer merge con nombres de supervisor: {e}")
+            # Si falla, no se crea la columna 'nombre' y el código sigue
+    
+    # --- FIN DE MODIFICACIÓN DE MERGE ---
+
+    # --- Lógica de 'Total Manejado' y 'Eficiencia' (sin cambios) ---
+    if es_pyme_page:
+        resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True, errors='ignore')
+    
+    if es_puntualidad_page:
+        resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Rebote']
+    else:
+        resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Citados'] + resumen['Rebote']
+    
+    if logica_tecnico:
+        cond_mas_de_7 = resumen['Total'] > 7
+        divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
+        resumen['Eficiencia_Total_%'] = np.where(divisor > 0,
+                                               round(resumen['Total Manejado'] * 100 / divisor, 1),
+                                               0.0)
+    else:
+        resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
+                                               round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+                                               0.0)
+    
+    # --- ¡LÓGICA DE FILA TOTAL MODIFICADA! ---
+    if not resumen.empty:
+        total_row = pd.Series(name='Total')
+        
+        # --- ¡NUEVO! Conteo de filas (Solo número) ---
+        num_filas = len(resumen) # Contamos las filas ANTES de añadir el total
+        if logica_tecnico: # Esta variable ya se pasa a la función
+            total_row[agrupar_por] = f"TOTAL ({num_filas})" # <-- MODIFICADO
+        elif agrupar_por == 'Supervisor':
+             total_row[agrupar_por] = f"TOTAL ({num_filas})" # <-- MODIFICADO
+        else:
+             total_row[agrupar_por] = 'TOTAL'
+        # --- FIN DE LA MODIFICACIÓN ---
+        
+        total_row['Total'] = resumen['Total'].sum()
+        total_row['Cerrados'] = resumen['Cerrados'].sum()
+        total_row['Referidos'] = resumen['Referidos'].sum()
+        total_row['Citados'] = resumen['Citados'].sum()
+        total_row['Rebote'] = resumen['Rebote'].sum()
+        total_row['Pendientes'] = resumen['Pendientes'].sum()
+        total_row['Total Manejado'] = resumen['Total Manejado'].sum()
+        
+        if es_pyme_page:
+            total_row['Vencidos'] = resumen['Vencidos'].sum()
+            total_row['Cerrados en Tiempo'] = resumen['Cerrados en Tiempo'].sum()
+        
+        total_manejado_general = total_row['Total Manejado']
+        total_general = total_row['Total']
+        total_row['Eficiencia_Total_%'] = round(total_manejado_general * 100 / total_general, 1) if total_general > 0 else 0.0
+        
+        resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
+    
+    # ¡MODIFICADO! Lógica de orden de columnas (SE ELIMINA 'nombre')
+    if es_pyme_page:
+        column_order = [
+            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
+            'Eficiencia_Total_%'
+        ]
+    else:
+        column_order = [
+            agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
+            'Pendientes', 'Total Manejado', 'Eficiencia_Total_%'
+        ]
+    
+    # Esta línea se encarga de ignorar 'nombre' si no existe (ej. al agrupar por Técnico)
+    final_columns_present = [col for col in column_order if col in resumen.columns]
+    resumen = resumen[final_columns_present]
+
+    return resumen
+
+def filtrar_dataframe(df_input, texto_busqueda):
+    if df_input is None or df_input.empty or not texto_busqueda:
+        return df_input
+    texto_busqueda = texto_busqueda.lower()
+    try:
+        mask = df_input.apply(lambda col: col.astype(str).str.lower().str.contains(texto_busqueda, na=False)).any(axis=1)
+        return df_input[mask]
     except Exception as e:
-        st.error(f"Error al convertir a Excel: {e}")
-        return None
+        st.error(f"Error durante el filtrado: {e}")
+        return df_input
 
-# ==============================================================================
-# --- INTERFAZ DE USUARIO (Streamlit) ---
-# ==============================================================================
-st.title("📋 Sistema KUNAI - v2.9.0 (CRUD HC)")
-st.markdown("---")
+def filtrar_dataframe_con_historial(df_completo_historial, df_unicos_para_buscar, texto_busqueda, supervisor_filter=None, estado_filter=None):
+    if df_completo_historial is None or df_completo_historial.empty:
+        return pd.DataFrame()
+    if not texto_busqueda:
+        return df_unicos_para_buscar if df_unicos_para_buscar is not None else pd.DataFrame(columns=df_completo_historial.columns)
+    if df_unicos_para_buscar is None or df_unicos_para_buscar.empty:
+        return pd.DataFrame(columns=df_completo_historial.columns)
+    texto_busqueda = texto_busqueda.lower()
+    cols_busqueda = ['OrdenExterna', 'Asignado_A', 'Cliente', 'Supervisor']
+    cols_presentes = [col for col in cols_busqueda if col in df_unicos_para_buscar.columns]
+    if not cols_presentes or 'OrdenExterna' not in df_unicos_para_buscar.columns:
+        st.warning("Columnas clave no encontradas para búsqueda.")
+        return pd.DataFrame(columns=df_completo_historial.columns)
+    try:
+        mask = df_unicos_para_buscar[cols_presentes].astype(str).apply(lambda x: x.str.lower().str.contains(texto_busqueda, na=False)).any(axis=1)
+    except Exception as e:
+        st.error(f"Error al aplicar filtro de búsqueda: {e}")
+        return pd.DataFrame(columns=df_completo_historial.columns)
+    tickets_encontrados = df_unicos_para_buscar[mask]['OrdenExterna'].unique()
+    if len(tickets_encontrados) == 0:
+        return pd.DataFrame(columns=df_completo_historial.columns)
+    if 'OrdenExterna' not in df_completo_historial.columns:
+        st.error("Error crítico: df_completo_historial no tiene 'OrdenExterna'.")
+        return pd.DataFrame(columns=df_completo_historial.columns)
+    df_historial = df_completo_historial[df_completo_historial['OrdenExterna'].isin(tickets_encontrados)].copy()
+    if supervisor_filter and 'Supervisor' in df_historial.columns:
+        df_historial = df_historial[df_historial['Supervisor'].astype(str) == str(supervisor_filter)]
+    ts_col_valid_hist = ('Timestamp_Procesado' in df_historial.columns and
+                        pd.api.types.is_datetime64_any_dtype(df_historial['Timestamp_Procesado']))
+    if ts_col_valid_hist:
+        df_historial = df_historial.sort_values(['OrdenExterna', 'Timestamp_Procesado'], ascending=[True, False], na_position='last')
+    elif 'OrdenExterna' in df_historial.columns:
+        df_historial = df_historial.sort_values('OrdenExterna')
+    return df_historial
 
-with st.expander("ℹ️ Estado de Archivos del Sistema", expanded=False):
-    col_info1, col_info2, col_info3, col_info4, col_info5 = st.columns(5) # <-- v2.9.0: 5 columnas
-    with col_info1:
-        st.markdown("**📸 Snapshot Hoy**")
-        snap_len = len(st.session_state.get('snapshot_hoy', pd.DataFrame()))
-        if snap_len > 0: st.success(f"✅ {snap_len} registros")
-        else: st.info("📭 Vacío")
-    with col_info2:
-        st.markdown("**📚 Historial de Cambios**")
-        hist_comp_len = len(st.session_state.get('historial_cambios', pd.DataFrame()))
-        if hist_comp_len > 0: st.success(f"✅ {hist_comp_len} registros")
-        else: st.info("📭 Vacío")
-    with col_info3:
-        st.markdown("**🔄 Reabiertos (Histórico)**")
-        reab_len = len(st.session_state.get('reabiertos', pd.DataFrame()))
-        if reab_len > 0: st.success(f"✅ {reab_len} registros")
-        else: st.info("📭 Vacío")
-    # --- v2.9.0: Nuevos estados ---
-    with col_info4:
-        st.markdown("🧑‍🔧 **HC Técnicos**")
-        hc_t_len = len(st.session_state.get('head_count_tecnicos', pd.DataFrame()))
-        if hc_t_len > 0: st.success(f"✅ {hc_t_len} registros")
-        else: st.info("📭 Vacío")
-    with col_info5:
-        st.markdown("🧑‍💼 **HC Supervisores**")
-        hc_s_len = len(st.session_state.get('head_count_supervisores', pd.DataFrame()))
-        if hc_s_len > 0: st.success(f"✅ {hc_s_len} registros")
-        else: st.info("📭 Vacío")
-    # --- Fin v2.9.0 ---
+
+# -----------------------------------------------
+# FUNCIONES DE AYUDA PARA PÁGINA DE TRACKING
+# -----------------------------------------------
+def get_color_estado(estado_str):
+    estado_str = str(estado_str).lower()
+    if estado_str in ['cerrado', 'validacion ext']: return '#32CD32'
+    elif estado_str in ['pendiente de calendarizacion', 'calendarizado']: return '#FFD700'
+    elif estado_str == 'pend trab interno': return '#FFA500'
+    elif estado_str in ['activo', 'iniciado']: return '#1E90FF'
+    elif estado_str == 'validacion int': return '#8A2BE2'
+    else: return '#696969'
+
+def formatear_fecha(fecha_dt):
+    if pd.isna(fecha_dt): return 'N/A'
+    if isinstance(fecha_dt, pd.Timestamp): return fecha_dt.strftime('%d/%m/%Y %H:%M')
+    return str(fecha_dt)
+
+def calcular_tiempo_transcurrido(fecha_inicio):
+    if pd.isna(fecha_inicio): return 'N/A'
+    if not isinstance(fecha_inicio, pd.Timestamp):
+        fecha_inicio = pd.to_datetime(fecha_inicio, errors='coerce')
+        if pd.isna(fecha_inicio): return 'N/A'
+    ahora_naive = get_current_ast_time()
+    fecha_inicio_naive = fecha_inicio.tz_convert(None) if hasattr(fecha_inicio, 'tzinfo') and fecha_inicio.tzinfo is not None else fecha_inicio.replace(tzinfo=None)
+    if ahora_naive < fecha_inicio_naive: return "Futuro"
+    diferencia = ahora_naive - fecha_inicio_naive
+    dias = diferencia.days
+    horas = diferencia.seconds // 3600
+    minutos = (diferencia.seconds % 3600) // 60
+    if dias > 0: return f"{dias}d {horas}h {minutos}m"
+    elif horas > 0: return f"{horas}h {minutos}m"
+    else: return f"{minutos}m"
+
+# ------------------------------------
+# FUNCIONES DE RENDERIZADO
+# ------------------------------------
+
+# ***** FUNCIÓN MODIFICADA *****
+# ------------------------------------
+# FUNCIONES DE RENDERIZADO
+# ------------------------------------
+def display_kpi_metrics(kpis, page_key, critical_metric_key=None, critical_delta_text="Críticos"):
+    def metric_with_critical(col, label, key, delta_text=None, delta_color="normal"):
+        value_to_display = kpis.get(key, 0)
+        if not isinstance(value_to_display, (int, float)): 
+            value_to_display = 0
+            
+        if key == critical_metric_key and value_to_display > 0:
+            col.markdown(f"""
+            <div style="
+                background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px;
+                padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); min-height: 104px;
+            ">
+                <div style="font-size: 0.875rem; margin-bottom: 8px; color: #31333F;">{label}</div>
+                <div style="font-size: 1.875rem; font-weight: 600; line-height: 1.2; color: #31333F;">
+                    <span style="margin-right: 8px; vertical-align: middle;">{value_to_display}</span>
+                    <span style="
+                        font-size: 0.75rem; font-weight: 500; color: #d32f2f; background-color: #ffebee;
+                        padding: 2px 6px; border-radius: 4px; display: inline-block; vertical-align: middle;
+                    ">↑ {delta_text}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif key == critical_metric_key and value_to_display <= 0:
+            col.metric(label, value_to_display)
+        else:
+            col.metric(label, value_to_display)
+
+    if page_key == "principal":
+        col1, col2, col3, col4, col5 = st.columns(5)
+        if st.session_state.user_role == "admin":
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
+            metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            
+            col6, col7, col8, col9, col10 = st.columns(5)
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col6.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
+            eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
+            col7.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+            metric_with_critical(col8, "📤 Referidos", 'Referidos')
+            metric_with_critical(col9, "📅 Citados", 'Citados')
+            metric_with_critical(col10, "🔄 Rebote", 'Rebote')
+        else: 
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col3, "🚀 Total Iniciado", 'Total_Iniciado')
+            metric_with_critical(col4, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col5, "📤 Referidos", 'Referidos')
+            
+            col6, col7, col8, col9, col10 = st.columns(5)
+            metric_with_critical(col6, "📅 Citados", 'Citados')
+            metric_with_critical(col7, "🔄 Rebote", 'Rebote')
+            metric_with_critical(col8, "🔄 Total Manejado", 'Manejados')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col9.metric("📊 Eficiencia Total", f"{eficiencia_valor:.1f}%")
+            eficiencia_ini_valor = kpis.get('Eficiencia_Inicial', 0.0)
+            col10.metric("📈 Eficiencia Inicial", f"{eficiencia_ini_valor:.1f}%")
+
+    # --- ¡NUEVO BLOQUE ESPECÍFICO PARA PYMES! ---
+    elif page_key == "pymes":
+        # Layout de 10 métricas (2 filas de 5)
+        
+        # --- FILA 1 ---
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        # (Lógica para Admin/Gerencia)
+        if st.session_state.user_role in ["admin", "gerencia"]:
+            metric_with_critical(col1, "📋 Total PYMEs", 'Total', delta_text=critical_delta_text)
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+            metric_with_critical(col3, "✅ Cerrados (Total)", 'Cerrados')
+            metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            
+            # --- FILA 2 ---
+            col6, col7, col8, col9, col10 = st.columns(5)
+            metric_with_critical(col6, "📤 Referidos", 'Referidos')
+            metric_with_critical(col7, "📅 Citados", 'Citados')
+            metric_with_critical(col8, "🔄 Rebote", 'Rebote')
+            
+            # --- ¡NUEVAS MÉTRICAS! ---
+            metric_with_critical(col9, "🏆 Cerrados en Tiempo", 'Pymes_Cerrados_en_Tiempo')
+            # ***** LÍNEA CORREGIDA *****
+            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos")
+
+        # (Lógica para Supervisor)
+        else:
+            metric_with_critical(col1, "📋 Total PYMEs", 'Total', delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col3, "✅ Cerrados (Total)", 'Cerrados')
+            metric_with_critical(col4, "📤 Referidos", 'Referidos')
+            metric_with_critical(col5, "📅 Citados", 'Citados')
+
+            # --- FILA 2 ---
+            col6, col7, col8, col9, col10 = st.columns(5)
+            metric_with_critical(col6, "🔄 Rebote", 'Rebote')
+            metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+            
+            # --- ¡NUEVAS MÉTRICAS! ---
+            metric_with_critical(col9, "🏆 Cerrados en Tiempo", 'Pymes_Cerrados_en_Tiempo')
+            # ***** LÍNEA CORREGIDA (esta es la que reportó el traceback) *****
+            metric_with_critical(col10, "⚠️ Vencidos", 'Pymes_Vencidos', delta_text="Vencidos")
+
+    # --- FIN DE BLOQUE PYMES ---
+
+    else: 
+        # Esta es la lógica original para las OTRAS páginas (Puntualidad, Antiguas, etc.)
+        col1, col2, col3, col4 = st.columns(4)
+        if st.session_state.user_role == "admin":
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col2.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+            metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col4, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            col5, col6, col7, col8 = st.columns(4)
+            metric_with_critical(col5, "🔄 Total Manejado", 'Manejados')
+            metric_with_critical(col6, "📤 Referidos", 'Referidos')
+            metric_with_critical(col7, "📅 Citados", 'Citados')
+            metric_with_critical(col8, "🔄 Rebote", 'Rebote')
+        else:
+            metric_with_critical(col1, "📋 Total (Nuevos Hoy)", 'Total', delta_text=critical_delta_text)
+            metric_with_critical(col2, "⏳ Pendientes", 'Pendientes', delta_text=critical_delta_text)
+            metric_with_critical(col3, "✅ Cerrados", 'Cerrados')
+            metric_with_critical(col4, "📤 Referidos", 'Referidos')
+            col5, col6, col7, col8 = st.columns(4)
+            metric_with_critical(col5, "📅 Citados", 'Citados')
+            metric_with_critical(col6, "🔄 Rebote", 'Rebote')
+            metric_with_critical(col7, "🔄 Total Manejado", 'Manejados')
+            eficiencia_valor = kpis.get('Eficiencia_Total_%', 0.0)
+            col8.metric("📊 Eficiencia", f"{eficiencia_valor:.1f}%")
+
+# ***** INICIO CAMBIO v2.7.7: Función 'display_detail_table' actualizada *****
+def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, file_name_prefix, reabiertos_set):
+    """
+    Muestra la tabla de detalles, ahora con resaltado y filtro para reabiertos.
+    'reabiertos_set' es un set de strings de 'caso'/'OrdenExterna' que están reabiertos.
+    """
+    busqueda_key = f"buscar_{page_key}"
+    texto_busqueda = st.text_input("🔍 Buscar en tabla", key=busqueda_key, placeholder="Buscar por Orden Externa, Cliente, Asignado...")
+    
+    # --- INICIO CAMBIO v2.7.7 ---
+    # Añadir el checkbox de filtro
+    filtro_reabiertos = st.checkbox("🟡 Mostrar solo reabiertos", key=f"check_reabiertos_{page_key}")
+    # --- FIN CAMBIO v2.7.7 ---
+
+    # Prepara el dataframe para mostrar ANTES de buscar (para el botón de descarga)
+    df_display_original = df_data_unicos_hoy.copy() if df_data_unicos_hoy is not None else pd.DataFrame()
+
+    if texto_busqueda:
+        supervisor_filter = None
+        if role == "supervisor":
+            supervisor_filter = role_supervisor_id
+        elif role in ["admin", "gerencia", "supervisor_old"] and global_supervisor_sel != "Todos":
+            supervisor_filter = global_supervisor_sel
+        
+        # Si hay búsqueda, el DataFrame se basa en el historial completo
+        df_filtrado_por_texto = filtrar_dataframe_con_historial(
+            df_full_historial, df_data_unicos_hoy, texto_busqueda, 
+            supervisor_filter, status_filter
+        )
+    else:
+        # Si no hay búsqueda, el DataFrame es el original
+        df_filtrado_por_texto = df_display_original
+
+    # --- INICIO CAMBIO v2.7.7: Aplicar el filtro de reabiertos ---
+    if filtro_reabiertos:
+        if 'OrdenExterna' in df_filtrado_por_texto.columns:
+            # Filtra el dataframe (sea el original o el de búsqueda)
+            df_filtrado_final = df_filtrado_por_texto[
+                df_filtrado_por_texto['OrdenExterna'].astype(str).isin(reabiertos_set)
+            ].copy() # Usamos .copy() para evitar SettingWithCopyWarning
+        else:
+            df_filtrado_final = pd.DataFrame(columns=df_filtrado_por_texto.columns) # Empty df
+    else:
+        df_filtrado_final = df_filtrado_por_texto.copy() # Usamos .copy()
+    # --- FIN CAMBIO v2.7.7 ---
+
+    # Función de estilo que se aplicará a cada fila
+    def highlight_reabiertos(row):
+        orden_externa = str(row.get('OrdenExterna', ''))
+        
+        if orden_externa in reabiertos_set:
+            # Color amarillo
+            return ['background-color: #fffacd; color: #5B4500;'] * len(row) 
+        else:
+            return [''] * len(row)
+
+    # Formatea los datos para visualización (fechas, None, etc.)
+    df_display_final_formateado = formatear_para_display(df_filtrado_final)
+
+    if not df_display_final_formateado.empty:
+        # Aplicar el estilo
+        st.dataframe(
+            df_display_final_formateado.style.apply(highlight_reabiertos, axis=1), 
+            use_container_width=True, 
+            hide_index=True
+        )
+    else:
+        # Mostrar un dataframe vacío si no hay resultados
+        st.dataframe(df_display_final_formateado, use_container_width=True, hide_index=True)
+
+    # --- INICIO CAMBIO v2.7.7: Lógica dinámica de descarga ---
+    
+    # 1. Determinar qué dataframe y nombre de archivo usar
+    if filtro_reabiertos:
+        # Si el filtro está activado, descargar solo los reabiertos (df_filtrado_final)
+        # Usamos df_filtrado_final (antes de formatear) para el excel
+        df_para_descargar = df_filtrado_final 
+        label_descarga = "📥 Descargar Reabiertos Filtrados (Excel)"
+        nombre_archivo = f"{file_name_prefix}_REABIERTOS_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        
+    else:
+        # Si el filtro está desactivado, descargar la vista completa (df_display_original)
+        df_para_descargar = df_display_original
+        label_descarga = "📥 Descargar Detalle (Vista Completa) como Excel"
+        nombre_archivo = f"{file_name_prefix}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+
+    # 2. Generar y mostrar el botón de descarga
+    # Solo mostrar el botón si el dataframe a descargar (sea cual sea) no está vacío
+    if not df_para_descargar.empty:
+        excel_data = to_excel(df_para_descargar) 
+        if excel_data:
+            st.download_button(
+                label=label_descarga,
+                data=excel_data,
+                file_name=nombre_archivo,
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                key=f"download_excel_{page_key}" # Añadir key para evitar conflictos
+            )
+    
+    # --- FIN CAMBIO v2.7.7 ---
+# ***** FIN CAMBIO v2.7.7 *****
+
+
+def render_hourly_trend_chart(df_page_data, df_full_historial, chart_key="hourly_trend_chart", dt_inicio=None, dt_fin=None):
+    st.markdown("---")
+    st.subheader("📊 Tendencia de Tickets Manejados por Hora")
+    try:
+        df_grafico = df_page_data.copy()
+        df_grafico['Fecha_Hora'] = df_grafico['Timestamp_Procesado'].dt.floor('H')
+        def agg_kpis_por_hora(group):
+            kpis_group = calcular_kpis(group, df_full_historial) 
+            return pd.Series(kpis_group)
+        resumen_hora = df_grafico.groupby('Fecha_Hora').apply(agg_kpis_por_hora).reset_index()
+        
+        if dt_inicio is None or dt_fin is None:
+            dt_inicio_ts = df_grafico['Fecha_Hora'].min()
+            dt_fin_ts = df_grafico['Fecha_Hora'].max()
+        else:
+            dt_inicio_ts = pd.Timestamp(dt_inicio)
+            dt_fin_ts = pd.Timestamp(dt_fin)
+        if pd.isna(dt_inicio_ts) or pd.isna(dt_fin_ts):
+            st.info("No hay datos en el rango seleccionado para mostrar la tendencia.")
+            return
+        all_hours_range = pd.date_range(start=dt_inicio_ts.floor('H'), end=dt_fin_ts.floor('H'), freq='H')
+        
+        df_horas_completas = pd.DataFrame({'Fecha_Hora': all_hours_range})
+        resumen_hora_completo = pd.merge(df_horas_completas, resumen_hora, on='Fecha_Hora', how='left')
+        cols_a_rellenar = ['Total', 'Manejados', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes']
+        for col in cols_a_rellenar:
+            if col not in resumen_hora_completo.columns:
+                resumen_hora_completo[col] = 0
+            else:
+                resumen_hora_completo[col] = resumen_hora_completo[col].fillna(0).astype(int)
+        fig_tendencia = px.line(
+            resumen_hora_completo, x='Fecha_Hora', y='Manejados', 
+            title="Tickets Manejados por Hora (Tendencia)", markers=True, text='Manejados'
+        )
+        fig_tendencia.update_traces(texttemplate='%{text}', textposition='top center')
+        fig_tendencia.update_traces(text = [val if val > 0 else '' for val in resumen_hora_completo['Manejados']])
+        fig_tendencia.update_layout(
+            xaxis_title="Fecha y Hora", yaxis_title="Tickets Manejados (conteo)",
+            yaxis=dict(rangemode='tozero'), template="plotly_dark", 
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig_tendencia, use_container_width=True, key=chart_key)
+    except Exception as e:
+        st.error(f"Error al generar el gráfico de tendencia: {e}")
+        st.error(traceback.format_exc())
+
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
+# ***** INICIO CAMBIO v2.7.5: 'render_dashboard_page' actualizada *****
+# (Añadido 'reabiertos_set' al final)
+# --- ¡FUNCIÓN MODIFICADA! ---
+# (Añadido 'df_head_count' al final de los argumentos)
+def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, reabiertos_set, df_head_count, critical_metric_key=None, dt_inicio=None, dt_fin=None, kpi_override=None):
+    if df_page_data is None or df_page_data.empty:
+        # --- Lógica de anulación para KPIs en página de puntualidad si está vacía ---
+        if page_key == "puntualidad" and kpi_override is not None:
+                kpis = kpi_override
+                display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos")
+                st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
+                st.markdown("---")
+                st.subheader("👥 Resumen por Supervisor")
+                # ¡NUEVO! Añadir 'nombre' a las columnas vacías
+                columnas_vacias = [global_supervisor_sel, 'nombre', 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 'Pendientes', 'Total Manejado', 'Eficiencia_Total_%']
+                st.dataframe(pd.DataFrame(columns=columnas_vacias), use_container_width=True, hide_index=True)
+                return
+        # --- Fin de lógica de anulación ---
+        
+        st.warning(f"No hay tickets **nuevos de hoy** para mostrar en '{title_prefix}' con los filtros actuales.")
+        
+        if page_key == "principal_sup" or page_key == "principal":
+                st.markdown("---")
+                st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
+                display_detail_table(
+                    df_data_unicos_hoy=df_page_data, df_full_historial=df_full_historial,
+                    role=role, role_supervisor_id=role_supervisor_id,
+                    global_supervisor_sel=global_supervisor_sel, status_filter=status_filter,
+                    page_key=page_key, file_name_prefix=page_key,
+                    reabiertos_set=reabiertos_set 
+                )
+        return
+        
+    kpis = calcular_kpis(df_page_data, df_full_historial)
+    
+    # --- Lógica de anulación de KPI (para Puntualidad) ---
+    if kpi_override is not None:
+        for key, value in kpi_override.items():
+            if key in kpis:
+                kpis[key] = value
+    
+    es_pyme_flag = (page_key == "pymes")
+    es_puntualidad_flag = (page_key == "puntualidad") # <-- ¡NUEVA LÍNEA!
+    
+    display_kpi_metrics(kpis, page_key, critical_metric_key, "Críticos" if page_key != "pymes" else "Vencidos")
+    
+    if role == "admin":
+        st.markdown("---")
+        st.subheader("👥 Desglose por Supervisor")
+        
+        # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+        resumen_admin = crear_resumen_admin(df_page_data, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+        
+        if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
+            st.warning("No hay datos de supervisores para graficar con los filtros actuales.")
+        else:
+            try:
+                col_chart1, col_chart2 = st.columns(2)
+                with col_chart1:
+                    st.markdown("#### 📊 Eficiencia Total por supervisor (%)")
+                    resumen_grafico_eff = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
+                    resumen_eff_sorted = resumen_grafico_eff.sort_values('Eficiencia_Total_%', ascending=True)
+                    fig_eff = px.bar(resumen_eff_sorted, x='Eficiencia_Total_%', y='Supervisor', orientation='h', text='Eficiencia_Total_%', color='Eficiencia_Total_%', color_continuous_scale='Blues')
+                    fig_eff.add_shape(type="line", x0=80, y0=-0.5, x1=80, y1=len(resumen_eff_sorted['Supervisor'])-0.5, line=dict(color="grey", width=2, dash="dash"))
+                    fig_eff.update_traces(texttemplate='%{text:.1f}%', textposition='auto')
+                    fig_eff.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title="Eficiencia Total (%)", yaxis_title=None, coloraxis_showscale=False)
+                    st.plotly_chart(fig_eff, use_container_width=True, key=f"{page_key}_eff_chart")
+                with col_chart2:
+                    st.markdown("#### 🎫 Tickets por supervisor")
+                    resumen_grafico_total = resumen_admin[resumen_admin['Supervisor'] != 'TOTAL']
+                    resumen_total_sorted = resumen_grafico_total.sort_values('Total', ascending=False)
+                    fig_total = px.bar(resumen_total_sorted, x='Supervisor', y='Total', text='Total', color='Total', color_continuous_scale='Blues')
+                    fig_total.update_traces(texttemplate='%{text}', textposition='outside')
+                    fig_total.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title=None, yaxis_title="Total Tickets", coloraxis_showscale=False)
+                    st.plotly_chart(fig_total, use_container_width=True, key=f"{page_key}_total_chart")
+                
+                if page_key != "pymes":
+                    st.markdown("#### ⏳ Tickets Pendientes por Supervisor")
+                    if 'Estado' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
+                        pendientes_df = df_page_data[df_page_data['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])]
+                    else:
+                        pendientes_df = pd.DataFrame()
+                    if not pendientes_df.empty:
+                        resumen_pendientes = pendientes_df.groupby('Supervisor')['OrdenExterna'].count().reset_index()
+                        resumen_pendientes.rename(columns={'OrdenExterna': 'Tickets Pendientes'}, inplace=True)
+                        resumen_pendientes = resumen_pendientes.sort_values('Tickets Pendientes', ascending=False)
+                        fig_pendientes = px.bar(resumen_pendientes, x='Supervisor', y='Tickets Pendientes', text='Tickets Pendientes', color='Tickets Pendientes', color_continuous_scale='Blues')
+                        fig_pendientes.update_traces(texttemplate='%{text}', textposition='outside')
+                        fig_pendientes.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title=None, yaxis_title="Total Tickets Pendientes", coloraxis_showscale=False)
+                        st.plotly_chart(fig_pendientes, use_container_width=True, key=f"{page_key}_pending_chart")
+                    else:
+                        st.info("No hay tickets pendientes ('activo' o 'iniciado') para mostrar.")
+
+                if page_key == "pymes":
+                    st.markdown("#### ⚠️ PYMEs Vencidas por Supervisor")
+                    # (Lógica de Pymes sin cambios)
+                    if 'Vencido' in df_page_data.columns and 'Supervisor' in df_page_data.columns:
+                        try:
+                            df_page_data['Vencido'] = df_page_data['Vencido'].astype(bool)
+                            # Usamos la lógica correcta de la tabla: vencidos Y pendientes
+                            pendientes_mask = df_page_data['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+                            vencidos_pymes_df = df_page_data[(df_page_data['Vencido'] == True) & (pendientes_mask)]
+                        except Exception as e:
+                            vencidos_pymes_df = pd.DataFrame()
+                    else:
+                        vencidos_pymes_df = pd.DataFrame()
+                        
+                    if not vencidos_pymes_df.empty:
+                        resumen_vencidos = vencidos_pymes_df.groupby('Supervisor')['OrdenExterna'].count().reset_index()
+                        resumen_vencidos.rename(columns={'OrdenExterna': 'PYMEs Vencidas'}, inplace=True)
+                        resumen_vencidos = resumen_vencidos.sort_values('PYMEs Vencidas', ascending=False)
+                        fig_vencidos = px.bar(
+                            resumen_vencidos, x='Supervisor', y='PYMEs Vencidas', text='PYMEs Vencidas',
+                            color='PYMEs Vencidas', color_continuous_scale='Reds'
+                        )
+                        fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
+                        fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                                xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                        st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
+                    else:
+                        st.info("No hay PYMEs vencidas para mostrar.")
+                
+                st.markdown("---")
+                st.markdown("#### 📋 Resumen Detallado por Supervisor")
+                st.dataframe(
+                    resumen_admin.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+                excel_data_resumen = to_excel(resumen_admin)
+                if excel_data_resumen:
+                    st.download_button(
+                        label="📥 Descargar Resumen Detallado",
+                        data=excel_data_resumen,
+                        file_name=f"{page_key}_resumen_admin_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+                if page_key == "rendimiento":
+                    render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
+            except Exception as e:
+                st.error(f"Ocurrió un error al generar los gráficos o la tabla: {e}")
+                if not resumen_admin.empty:
+                    st.dataframe(resumen_admin, use_container_width=True, hide_index=True)
+    
+    elif role == "gerencia":
+        st.markdown("---")
+        st.subheader("👥 Resumen por Supervisor")
+        
+        # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+        resumen_sup = crear_resumen_admin(df_page_data, df_head_count, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+        
+        st.dataframe(
+            resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
+            use_container_width=True, 
+            hide_index=True
+        )
+        st.markdown("---")
+        st.subheader("👨‍🔧 Resumen por Técnico")
+        if 'Asignado_A' in df_page_data.columns:
+            # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+            resumen_tec = crear_resumen_admin(df_page_data, df_head_count, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+            
+            if not resumen_tec.empty:
+                resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
+            st.dataframe(
+                resumen_tec.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
+                use_container_width=True, 
+                hide_index=True
+            )
+        else:
+            st.info("No hay datos de 'Asignado_A' para mostrar resumen.")
+        if page_key == "rendimiento":
+            render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
+        st.markdown("---")
+        st.subheader("🗂️ Detalle de Tickets")
+        display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
+    
+    else: # Roles 'supervisor' y 'supervisor_old'
+        agrupar_por = 'Supervisor' if role == 'supervisor_old' else 'Asignado_A'
+        titulo_resumen = 'Resumen por Supervisor' if role == 'supervisor_old' else 'Resumen por Técnico'
+        es_logica_tecnico = (agrupar_por == 'Asignado_A')
+        
+        if page_key == "principal" or page_key != "principal": 
+            st.markdown("---")
+            st.subheader(f"👥 {titulo_resumen}")
+            if agrupar_por in df_page_data.columns:
+                
+                # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+                resumen = crear_resumen_admin(df_page_data, df_head_count, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+                
+                if not resumen.empty:
+                    resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
+                    if es_logica_tecnico:
+                        st.dataframe(
+                            resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
+                            use_container_width=True, 
+                            hide_index=True
+                        )
+                    else:
+                        st.dataframe(
+                            resumen.style.format({'Eficiencia_Total_%': '{:.1f}'}),
+                            use_container_width=True, 
+                            hide_index=True
+                        )
+                    excel_data_resumen_sup = to_excel(resumen)
+                    if excel_data_resumen_sup:
+                        st.download_button(
+                            label=f"📥 Descargar {titulo_resumen}",
+                            data=excel_data_resumen_sup,
+                            file_name=f"{page_key}_resumen_{agrupar_por.lower()}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key=f"{page_key}_download_resumen"
+                        )
+                else:
+                    st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
+            else:
+                st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
+        
+        if page_key == "rendimiento":
+            render_hourly_trend_chart(df_page_data, df_full_historial, chart_key=f"{page_key}_hourly_chart", dt_inicio=dt_inicio, dt_fin=dt_fin)
+        
+        st.markdown("---")
+        st.subheader("📋 Detalle de Tickets")
+        display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
+# --- End of Render Dashboard Function ---
+# ***** FIN CAMBIO v2.7.5 *****
+# --- End of Render Dashboard Function ---
+# ***** FIN CAMBIO v2.7.5 *****
+
+# --- ¡NUEVO! FUNCIONES CRUD PARA LA BASE DE DATOS ---
+@st.cache_data(ttl=5)
+def get_all_users():
+    """Obtiene todos los usuarios de la tabla de login."""
+    engine = get_database_engine()
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT username, role, supervisor_id, nombre_supervisor FROM usuarios_dashboard ORDER BY username")
+            df_users = pd.read_sql(query, conn)
+            return df_users
+    except Exception as e:
+        st.error(f"Error al obtener usuarios: {e}")
+        return pd.DataFrame()
+
+def create_user_db(username, password, role, supervisor_id, nombre_supervisor):
+    """Crea un nuevo usuario en la DB con contraseña hasheada."""
+    engine = get_database_engine()
+    
+    # Hashear la contraseña
+    hashed_pass = hash_password(password)
+    
+    # Convertir campos vacíos a None para la DB
+    supervisor_id = supervisor_id if supervisor_id else None
+    nombre_supervisor = nombre_supervisor if nombre_supervisor else None
+
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                INSERT INTO usuarios_dashboard (username, password, role, supervisor_id, nombre_supervisor)
+                VALUES (:user, :pass, :role, :sup_id, :nombre)
+            """)
+            conn.execute(query, {
+                "user": username,
+                "pass": hashed_pass,
+                "role": role,
+                "sup_id": supervisor_id,
+                "nombre": nombre_supervisor
+            })
+            conn.commit()
+        return True
+    except Exception as e:
+        # Captura error de llave duplicada
+        if "UniqueViolation" in str(e):
+            st.error(f"Error: El username '{username}' ya existe.")
+        else:
+            st.error(f"Error al crear usuario: {e}")
+        return False
+
+def update_user_db(username, password, role, supervisor_id, nombre_supervisor):
+    """Actualiza un usuario existente. Si la contraseña está vacía, no se actualiza."""
+    engine = get_database_engine()
+    
+    # Convertir campos vacíos a None
+    supervisor_id = supervisor_id if supervisor_id else None
+    nombre_supervisor = nombre_supervisor if nombre_supervisor else None
+
+    try:
+        with engine.connect() as conn:
+            if password:
+                # Si se proporcionó una nueva contraseña, hashearla y actualizarla
+                hashed_pass = hash_password(password)
+                query = text("""
+                    UPDATE usuarios_dashboard
+                    SET password = :pass, role = :role, supervisor_id = :sup_id, nombre_supervisor = :nombre
+                    WHERE username = :user
+                """)
+                conn.execute(query, {
+                    "pass": hashed_pass,
+                    "role": role,
+                    "sup_id": supervisor_id,
+                    "nombre": nombre_supervisor,
+                    "user": username
+                })
+            else:
+                # Si la contraseña está vacía, no actualizarla
+                query = text("""
+                    UPDATE usuarios_dashboard
+                    SET role = :role, supervisor_id = :sup_id, nombre_supervisor = :nombre
+                    WHERE username = :user
+                """)
+                conn.execute(query, {
+                    "role": role,
+                    "sup_id": supervisor_id,
+                    "nombre": nombre_supervisor,
+                    "user": username
+                })
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error al actualizar usuario: {e}")
+        return False
+
+def delete_user_db(username):
+    """Elimina un usuario de la DB."""
+    # Prevenir que el admin se borre a sí mismo
+    if username == st.session_state.username:
+        st.error("No puedes eliminar al usuario con el que estás logueado.")
+        return False
+        
+    engine = get_database_engine()
+    try:
+        with engine.connect() as conn:
+            query = text("DELETE FROM usuarios_dashboard WHERE username = :user")
+            conn.execute(query, {"user": username})
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar usuario: {e}")
+        return False
+
+# --- ¡NUEVO! PÁGINA DE ADMINISTRACIÓN (CRUD) ---
+def render_admin_crud_page():
+    st.title("⚙️ Administración de Usuarios")
+    
+    st.info("""
+    **Importante sobre Contraseñas:**
+    * **Crear:** Se requiere una contraseña. Se guardará encriptada.
+    * **Actualizar:** Si dejas el campo "Nueva Contraseña" vacío, la contraseña antigua *no* cambiará. Si escribes una nueva, se encriptará y reemplazará la anterior.
+    * **Migración:** Los usuarios con contraseñas antiguas (texto plano) podrán iniciar sesión una vez. Al hacerlo, su contraseña se actualizará automáticamente a una versión encriptada.
+    """)
+
+    # Cargar todos los usuarios para mostrar y seleccionar
+    df_users = get_all_users()
+    if df_users.empty:
+        st.warning("No se pudieron cargar los usuarios o no hay usuarios en la base de datos.")
+        
+    user_list = [""] + df_users['username'].tolist()
     
     st.markdown("---")
-    lote_actual_display = st.session_state.get('lote_actual', 0)
-    st.caption(f"🔢 **Lote de Procesamiento Actual:** {lote_actual_display} (El próximo snapshot iniciará el lote **{lote_actual_display + 1}**)")
-    st.caption(f"🗓️ **Fecha actual:** {date.today().strftime('%d/%m/%Y')}")
-
-# --- v2.9.0: Añadidas nuevas pestañas ---
-tab1, tab2, tab3, tab_monitoreo, tab_correccion, tab_reabiertos, tab_hc_tecnicos, tab_hc_supervisores, tab4 = st.tabs([
-    "📥 P1: Cargar Activos",
-    "🔍 P2: Buscar Desaparecidas",
-    "✅ P3: Clasificar",
-    "🔄 Monitoreo",
-    "🔧 Corrección Manual",
-    "🔄 Reabiertos", 
-    "🧑‍🔧 HC Técnicos",
-    "🧑‍💼 HC Supervisores",
-    "📊 Historial"
-])
-
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 1: CARGAR ACTIVOS ---
-# ------------------------------------------------------------------------------
-with tab1:
-    st.header("Paso 1: Cargar Órdenes en Estado 'Activo' e 'Iniciado'")
-    with st.expander("📖 Instrucciones (v2.7.4)", expanded=True):
-        st.markdown(f"""
-        **Lógica del Sistema v2.7.4 (Historial de Cambios):**
-        
-        1.  **`Historial Completo`**:
-            * Es el **ÚNICO** historial.
-            * Recibe **SOLO** los tickets `NUEVO` y `CAMBIO` del Lote.
-            * **NO GUARDA** tickets `ACTIVO` (sin cambios).
-            * Nunca se borra.
-        
-        2.  **`Paso 2 / Monitoreo / Corrección`**:
-            * Si un ticket encontrado/corregido tiene cambios reales -> Se guarda en el `Historial Completo`.
-        
-        3.  **`Pestaña Monitoreo`**:
-            * Dividida en "General" (por último estado) y "Nuevos de Hoy" (por fecha de nacimiento).
-        """)
-
     
-    ESTADOS_PERMITIDOS_PASO1 = ['activo', 'iniciado']
-    col1, col2, col3 = st.columns([2, 2, 1])
+    tab1, tab2, tab3 = st.tabs(["👥 Ver Todos los Usuarios", "➕ Crear Nuevo Usuario", "✏️ Actualizar / ❌ Eliminar Usuario"])
 
-    with col1:
-        if st.button("📋 Pegar y Agregar desde Portapapeles", type="primary", use_container_width=True, key="pegar_p1"):
-            texto = pyperclip.paste()
-            df_temp = procesar_texto_kunai_mejorado(texto)
-            if not df_temp.empty:
-                estado_limpio = df_temp['Estado'].astype(str).str.strip().str.lower()
-                df_temp_validos = df_temp[estado_limpio.isin(ESTADOS_PERMITIDOS_PASO1)]
-                df_temp_rechazados = df_temp[~estado_limpio.isin(ESTADOS_PERMITIDOS_PASO1)]
-                
-                if not df_temp_validos.empty:
-                    st.session_state.datos_paso1_acumulado = align_and_concat(
-                        st.session_state.datos_paso1_acumulado, df_temp_validos
-                    ).drop_duplicates(subset=['OrdenExterna'], keep='last').reset_index(drop=True)
-                    st.success(f"✅ Agregadas {len(df_temp_validos)} órdenes. Total acumulado: {len(st.session_state.datos_paso1_acumulado)}")
-                
-                if not df_temp_rechazados.empty:
-                    st.warning(f"⚠️ Se descartaron {len(df_temp_rechazados)} órdenes porque NO están en 'Activo' o 'Iniciado'.")
-                    st.dataframe(df_temp_rechazados[['OrdenExterna', 'Estado', 'Cliente']], use_container_width=True)
-                
-                if df_temp_validos.empty and not df_temp_rechazados.empty:
-                    st.warning("⚠️ De los datos pegados, ninguna orden era 'Activo' o 'Iniciado'.")
-                elif df_temp_validos.empty and df_temp_rechazados.empty:
-                    st.warning("⚠️ No se encontraron datos válidos en el portapapeles.")
-            else:
-                st.warning("⚠️ No se encontraron datos válidos en el portapapeles.")
-                
-    with col2:
-        if st.button("⚡ Finalizar Snapshot e Incrementar Lote", use_container_width=True, key="finalizar_p1",
-                    disabled=st.session_state.datos_paso1_acumulado.empty):
-            with st.spinner(f"Procesando Snapshot (Lote {st.session_state.get('lote_actual', 0) + 1})..."):
-                df_acumulado_raw = st.session_state.datos_paso1_acumulado.copy()
-                estado_limpio_raw = df_acumulado_raw['Estado'].astype(str).str.strip().str.lower()
-                df_actual = df_acumulado_raw[estado_limpio_raw.isin(ESTADOS_PERMITIDOS_PASO1)].reset_index(drop=True)
-                df_rechazado_final = df_acumulado_raw[~estado_limpio_raw.isin(ESTADOS_PERMITIDOS_PASO1)]
-                
-                if not df_rechazado_final.empty:
-                    st.error(f"❌ **Error Consistencia:** {len(df_rechazado_final)} órdenes acumuladas NO son 'Activo'/'Iniciado'. Se filtrarán.")
+    with tab1:
+        st.subheader("Lista de Usuarios Actuales")
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
 
-                if df_actual.empty:
-                    st.error("❌ No hay órdenes válidas ('Activo' o 'Iniciado') para finalizar.")
+    with tab2:
+        st.subheader("Crear Nuevo Usuario")
+        with st.form("create_user_form", clear_on_submit=True):
+            st.markdown("##### Detalles del Nuevo Usuario")
+            new_username = st.text_input("Username (para login)", key="new_user")
+            new_nombre = st.text_input("Nombre Completo (para mostrar)", key="new_name")
+            new_pass = st.text_input("Contraseña", type="password", key="new_pass")
+            new_role = st.selectbox("Rol", ["admin", "gerencia", "supervisor", "supervisor_old"], key="new_role")
+            new_sup_id = st.text_input("Supervisor ID (si aplica)", key="new_sup_id")
+            
+            submitted_create = st.form_submit_button("Crear Usuario")
+            
+            if submitted_create:
+                if not new_username or not new_pass or not new_role:
+                    st.error("Username, Contraseña y Rol son campos obligatorios.")
                 else:
-                    df_actual['Fuente_Paso'] = 'Paso 1: Activos'
-                    ids_actuales = set(df_actual['OrdenExterna'])
-                    ids_maestra_anteriores = set()
-                    
-                    snapshot_anterior = st.session_state.snapshot_hoy.copy()
-                    if not snapshot_anterior.empty: 
-                        ids_maestra_anteriores.update(snapshot_anterior['OrdenExterna'])
-                    
-                    historial_completo = st.session_state.historial_cambios
-                    if not historial_completo.empty and 'Estado' in historial_completo.columns:
-                        try:
-                            hist_ult = normalizar_timestamps(historial_completo).sort_values('Timestamp_Procesado', ascending=False).drop_duplicates(subset=['OrdenExterna'], keep='first')
-                            hist_ant_act = hist_ult[hist_ult['Estado'].astype(str).str.strip().str.lower().isin(['activo', 'iniciado'])]
-                            if not hist_ant_act.empty: ids_maestra_anteriores.update(hist_ant_act['OrdenExterna'])
-                        except Exception as e: st.warning(f"⚠️ Error procesando historial para desaparecidos: {e}")
-                    
-                    ids_desaparecidos = ids_maestra_anteriores - ids_actuales
-                    st.session_state.ordenes_a_buscar = sorted(list(ids_desaparecidos))
-
-                    eventos_guardados, activos_ignorados, exito = guardar_snapshot_y_detectar_cambios(df_actual)
-                    
-                    if exito: 
-                        nuevo_lote = st.session_state.get('lote_actual', 0)
-                        st.success(f"✅ Snapshot Lote {nuevo_lote} finalizado ({len(df_actual)} regs)! Se añadieron **{eventos_guardados}** eventos (NUEVO/CAMBIO) al Historial.")
-                        if activos_ignorados > 0:
-                            st.info(f"ℹ️ Se ignoraron **{activos_ignorados}** tickets 'ACTIVO' (sin cambios).")
-                        
-                        st.info(f"💾 Snapshot reemplazado, historial actualizado en CSV y Supabase ☁️.")
-                        if st.session_state.ordenes_a_buscar:
-                            st.warning(f"🔍 Detectadas **{len(st.session_state.ordenes_a_buscar)}** órdenes desaparecidas. Pasa al Paso 2.")
-                        st.session_state.datos_paso1_acumulado = pd.DataFrame()
+                    success = create_user_db(new_username, new_pass, new_role, new_sup_id, new_nombre)
+                    if success:
+                        st.success(f"¡Usuario '{new_username}' creado exitosamente!")
+                        st.cache_data.clear() # Limpiar caché para que get_all_users() se actualice
                         st.rerun()
+
+    with tab3:
+        st.subheader("Actualizar o Eliminar un Usuario Existente")
+        
+        # 1. Seleccionar usuario
+        user_to_edit = st.selectbox("Selecciona un usuario para editar", options=user_list, key="edit_user_select")
+        
+        if user_to_edit:
+            # Cargar datos del usuario seleccionado
+            user_data = df_users[df_users['username'] == user_to_edit].iloc[0].to_dict()
+            
+            with st.form("update_user_form"):
+                st.markdown(f"#### Editando a: {user_data['username']}")
+                
+                # Campos pre-llenados
+                update_nombre = st.text_input("Nombre Completo", value=user_data.get('nombre_supervisor') or '', key="update_name")
+                
+                # Encontrar el índice del rol actual para el selectbox
+                role_options = ["admin", "gerencia", "supervisor", "supervisor_old"]
+                try:
+                    current_role_index = role_options.index(user_data.get('role'))
+                except ValueError:
+                    current_role_index = 0 # Fallback
+                
+                update_role = st.selectbox("Rol", role_options, index=current_role_index, key="update_role")
+                update_sup_id = st.text_input("Supervisor ID", value=user_data.get('supervisor_id') or '', key="update_sup_id")
+                
+                st.markdown("---")
+                st.markdown("##### Actualizar Contraseña (Opcional)")
+                st.caption("Deja este campo vacío si NO quieres cambiar la contraseña.")
+                update_pass = st.text_input("Nueva Contraseña (dejar vacío para no cambiar)", type="password", key="update_pass")
+                
+                col_update, col_delete = st.columns(2)
+                
+                with col_update:
+                    submitted_update = st.form_submit_button("💾 Actualizar Usuario", use_container_width=True)
+                
+                with col_delete:
+                    submitted_delete = st.form_submit_button("❌ ¡Eliminar Usuario!", type="primary", use_container_width=True)
+
+                if submitted_update:
+                    success = update_user_db(user_to_edit, update_pass, update_role, update_sup_id, update_nombre)
+                    if success:
+                        st.success(f"¡Usuario '{user_to_edit}' actualizado!")
+                        st.cache_data.clear()
+                        st.rerun()
+                
+                if submitted_delete:
+                    if user_to_edit == st.session_state.username:
+                            st.error("No puedes eliminar al usuario con el que estás logueado.")
                     else:
-                        st.error("❌ Ocurrió un error al guardar el snapshot.")
-                
-    with col3:
-        if st.button("🗑️ Limpiar Acumulado P1", use_container_width=True, key="limpiar_p1",
-                    disabled=st.session_state.datos_paso1_acumulado.empty):
-            st.session_state.datos_paso1_acumulado = pd.DataFrame()
-            st.rerun()
+                        st.session_state[f'confirm_delete_{user_to_edit}'] = True
+            
+            # Lógica de confirmación de borrado (fuera del form)
+            if st.session_state.get(f'confirm_delete_{user_to_edit}'):
+                st.warning(f"**¿Estás seguro de que quieres eliminar a {user_to_edit}?** Esta acción es irreversible.")
+                col_confirm, col_cancel = st.columns(2)
+                with col_confirm:
+                    if st.button("SÍ, ELIMINAR A ESTE USUARIO", type="primary", use_container_width=True):
+                        success = delete_user_db(user_to_edit)
+                        if success:
+                            st.success(f"¡Usuario '{user_to_edit}' eliminado!")
+                            st.cache_data.clear()
+                            st.session_state[f'confirm_delete_{user_to_edit}'] = False
+                            st.rerun()
+                with col_cancel:
+                    if st.button("Cancelar", use_container_width=True):
+                        st.session_state[f'confirm_delete_{user_to_edit}'] = False
+                        st.rerun()
+
+# --- FIN DE LA PÁGINA CRUD ---
+
+
+# --------------------------
+# Filtrado por Rol y Sidebar
+# --------------------------
+df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
+
+st.sidebar.title("📌 Menú")
+
+# --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
+# AÑADIDO "🔄 Reabiertos" v2.7.3
+menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"] 
+
+# 1. Añadir "Tracking Ticket" para todos EXCEPTO para 'admin'
+if st.session_state.user_role != "admin":
+    menu_options_base.insert(4, "🔍 Tracking Ticket") # Lo inserta después de "Citas Puntuales"
+
+# 2. Añadir "Admin Usuarios" SÓLO para 'admin' y 'supervisor_old'
+if st.session_state.user_role in ["admin", "supervisor_old"]:
+    menu_options_base.append("⚙️ Admin Usuarios") # Lo añade al final
     
-    if not st.session_state.datos_paso1_acumulado.empty:
-        st.metric("Órdenes Acumuladas para Snapshot (Solo Activo/Iniciado)", len(st.session_state.datos_paso1_acumulado))
-        
-        df_acumulado_ordenado = reordenar_dataframe_para_salida(st.session_state.datos_paso1_acumulado, es_snapshot=True)
+menu = st.sidebar.radio("Selecciona una página", menu_options_base)
+# --- FIN DE LA CORRECCIÓN DE MENÚ ---
 
-        excel_data_p1 = convertir_a_excel(df_acumulado_ordenado, es_snapshot=True) 
-        if excel_data_p1:
-            st.download_button(label="📥 Descargar Acumulado (Excel)", data=excel_data_p1,
-                                file_name=f"acumulado_paso1_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key='download-excel-paso1')
-        st.dataframe(df_acumulado_ordenado, use_container_width=True, height=400) 
+st.sidebar.markdown("---")
+st.sidebar.subheader("Filtros")
 
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 2: BUSCAR DESAPARECIDAS ---
-# ------------------------------------------------------------------------------
-with tab2:
-    st.header("Paso 2: Buscar Órdenes Desaparecidas")
-    lote_actual_p2 = st.session_state.get('lote_actual', 0)
+# Opciones de filtro basadas en df_unicos_base (solo hoy)
+supervisor_options = ["Todos"]
+estado_options = []
 
-    if st.session_state.ordenes_a_buscar:
-        st.info(f"🔍 Se deben buscar **{len(st.session_state.ordenes_a_buscar)}** órdenes (del Lote {lote_actual_p2}).")
-        st.text_area("1️⃣ Copia esta lista y búscala en KUNAI:", value=','.join(st.session_state.ordenes_a_buscar), height=100, key="lista_buscar_p2")
+if df_unicos_base is not None and not df_unicos_base.empty:
+    if 'Supervisor' in df_unicos_base.columns:
+        supervisores_validos = sorted([str(s) for s in df_unicos_base['Supervisor'].dropna().unique() if str(s).strip()])
+        supervisor_options.extend(supervisores_validos)
+    if 'Estado' in df_unicos_base.columns:
+        estados_validos = sorted([str(e) for e in df_unicos_base['Estado'].dropna().unique() if str(e).strip()])
+        estado_options = estados_validos
+
+# Controles de Sidebar
+if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
+    supervisor_sel = st.sidebar.selectbox("Supervisor", supervisor_options)
+else:
+    supervisor_sel = st.session_state.supervisor_id
+estatus_sel = st.sidebar.multiselect("Estado", options=estado_options, default=estado_options)
+
+# --- ¡NUEVO! Botón de Refresh Manual ---
+if st.session_state.user_role in ["admin", "supervisor_old"]:
+    st.sidebar.markdown("---") # Separador visual
+    if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
+        # Limpia la caché de TODAS las funciones @st.cache_data
+        st.cache_data.clear()   
+        # Vuelve a ejecutar el script inmediatamente
+        st.rerun()
+# --- FIN DEL NUEVO BLOQUE ---
+# --- DataFrames Filtrados (Basados en 'df' - solo NUEVOS HOY) ---
+df_supervisor_unicos = df_unicos_base.copy() if df_unicos_base is not None else pd.DataFrame()
+if not df_supervisor_unicos.empty:
+    if st.session_state.user_role == "supervisor":
+        if 'Supervisor' in df_supervisor_unicos.columns:
+            df_supervisor_unicos = df_supervisor_unicos[df_supervisor_unicos['Supervisor'].astype(str) == str(st.session_state.supervisor_id)]
+        else:
+            df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
+    elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
+        if 'Supervisor' in df_supervisor_unicos.columns:
+            df_supervisor_unicos = df_supervisor_unicos[df_supervisor_unicos['Supervisor'].astype(str) == str(supervisor_sel)]
+        else:
+            df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
+
+# ***** INICIO CAMBIO v2.7.6 *****
+# Ahora, basándonos en df_supervisor_unicos, creamos el filtro Asignado_A
+asignado_a_options = []
+if not df_supervisor_unicos.empty and 'Asignado_A' in df_supervisor_unicos.columns:
+    asignado_a_options = sorted([str(s) for s in df_supervisor_unicos['Asignado_A'].dropna().unique() if str(s).strip()])
+
+asignado_sel = [] # Inicializar
+if st.session_state.user_role == "supervisor": # Solo para este rol
+    if not asignado_a_options:
+        st.sidebar.info("No hay técnicos asignados para filtrar.")
+    else:
+        # Hacemos que "Asignado A" sea un multiselect y seleccionamos todo por defecto
+        asignado_sel = st.sidebar.multiselect("Asignado A", options=asignado_a_options, default=asignado_a_options)
+# ***** FIN CAMBIO v2.7.6 *****
+
+
+df_unicos = df_supervisor_unicos.copy() if df_supervisor_unicos is not None else pd.DataFrame()
+if not df_unicos.empty and estatus_sel:
+    if 'Estado' in df_unicos.columns:
+        df_unicos = df_unicos[df_unicos['Estado'].astype(str).isin(estatus_sel)]
+    elif not df_unicos.empty:
+        df_unicos = pd.DataFrame(columns=df_supervisor_unicos.columns if df_supervisor_unicos is not None else [])
+
+# ***** INICIO CAMBIO v2.7.6: Aplicar filtro Asignado_A *****
+if not df_unicos.empty and asignado_sel: # Si se seleccionó algo en el filtro Asignado_A
+    if 'Asignado_A' in df_unicos.columns:
+        df_unicos = df_unicos[df_unicos['Asignado_A'].astype(str).isin(asignado_sel)]
+    elif not df_unicos.empty:
+        # Si el filtro está activo pero la columna no existe, vaciar
+        df_unicos = df_unicos.iloc[0:0] 
+# ***** FIN CAMBIO v2.7.6 *****
+
+
+# --------------------------
+# --- ¡CONTENIDO DE PÁGINAS MODIFICADO! ---
+# --------------------------
+
+if menu == "🏠 Principal":
+    st.title(f"🏠 Dashboard Principal - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Mostrando tickets cuyo **primer registro** fue hoy.") 
+    if st.session_state.user_role in ["admin", "gerencia"]:
+        render_dashboard_page(
+            title_prefix="Principal", df_page_data=df_unicos, df_full_historial=df_full_historial,
+            role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="principal",
+            reabiertos_set=set_casos_reabiertos,
+            df_head_count=df_head_count, # <-- PASANDO REABIERTOS
+            critical_metric_key='Pendientes' 
+        )
+    else: 
+        kpis_supervisor = calcular_kpis(df_unicos, df_full_historial)
+        display_kpi_metrics(kpis_supervisor, page_key="principal", critical_metric_key='Pendientes')
         st.markdown("---")
-        st.subheader("2️⃣ Pega aquí los resultados encontrados")
-        col1_p2, col2_p2, col3_p2 = st.columns([2, 2, 1])
-        with col1_p2:
-            if st.button("📋 Pegar y Agregar Encontradas", type="primary", use_container_width=True, key="pegar_p2"):
-                texto = pyperclip.paste()
-                df_temp = procesar_texto_kunai_mejorado(texto)
-                if not df_temp.empty:
-                    st.session_state.datos_paso2_acumulado = align_and_concat(st.session_state.datos_paso2_acumulado, df_temp).drop_duplicates(subset=['OrdenExterna'], keep='last').reset_index(drop=True)
-                    st.success(f"✅ Agregadas {len(df_temp)}. Total encontradas: {len(st.session_state.datos_paso2_acumulado)}")
-                else: st.warning("⚠️ No se procesaron datos válidos.")
-        with col2_p2:
-            if st.button("⚡ Guardar Encontradas", use_container_width=True, key="finalizar_p2", disabled=st.session_state.datos_paso2_acumulado.empty):
-                with st.spinner(f"Guardando órdenes encontradas (Lote {lote_actual_p2})..."):
-                    df_encontradas = st.session_state.datos_paso2_acumulado.copy()
-                    df_encontradas['Fuente_Paso'] = 'Paso 2: Encontrados'
-                    guardados, sin_cambios = guardar_en_historial_con_comparacion(df_encontradas, 'ENCONTRADO')
-                    ids_buscados = set(st.session_state.ordenes_a_buscar)
-                    ids_encontrados_ahora = set(df_encontradas['OrdenExterna'])
-                    st.session_state.ordenes_no_encontradas = sorted(list(ids_buscados - ids_encontrados_ahora))
-                    st.success(f"✅ {guardados} órdenes con cambios **añadidas** al Historial Completo (Lote {lote_actual_p2}).")
-                    if sin_cambios > 0: st.info(f"ℹ️ {sin_cambios} órdenes encontradas sin cambios (no se guardaron).")
-                    if st.session_state.ordenes_no_encontradas: st.warning(f"⚠️ **{len(st.session_state.ordenes_no_encontradas)}** órdenes buscadas NO estaban en los datos pegados → Pasa a Paso 3.")
-                    else: st.success("🎉 ¡Todas las órdenes buscadas fueron encontradas!")
-                    st.session_state.datos_paso2_acumulado = pd.DataFrame()
-                    st.session_state.ordenes_a_buscar = []
-                    st.rerun()
-        with col3_p2:
-            if st.button("🗑️ Limpiar Acum. P2", use_container_width=True, key="limpiar_p2", disabled=st.session_state.datos_paso2_acumulado.empty):
-                st.session_state.datos_paso2_acumulado = pd.DataFrame()
-                st.rerun()
-            if st.session_state.ordenes_a_buscar and st.session_state.datos_paso2_acumulado.empty:
-                if st.button("❌ Marcar Todas Como No Encontradas", use_container_width=True, key="no_encontrado_p2"):
-                    st.session_state.ordenes_no_encontradas = sorted(list(st.session_state.ordenes_a_buscar))
-                    st.warning(f"⚠️ {len(st.session_state.ordenes_no_encontradas)} órdenes marcadas como 'No Encontradas' → Pasa a Paso 3.")
-                    st.session_state.datos_paso2_acumulado = pd.DataFrame()
-                    st.session_state.ordenes_a_buscar = []
-                    st.rerun()
-    else: st.info("📌 No hay órdenes pendientes de búsqueda.")
-    if not st.session_state.datos_paso2_acumulado.empty:
+        agrupar_por = 'Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Asignado_A'
+        titulo_resumen = 'Resumen por Supervisor' if st.session_state.user_role == 'supervisor_old' else 'Resumen por Técnico'
+        es_logica_tecnico = (agrupar_por == 'Asignado_A')
+        st.subheader(f"👥 {titulo_resumen}")
+        if agrupar_por in df_unicos.columns:
+            
+            # --- ¡CORRECCIÓN AQUÍ! FALTABA df_head_count ---
+            resumen = crear_resumen_admin(df_unicos, df_head_count, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=False)
+            
+            if not resumen.empty:
+                resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
+                if es_logica_tecnico:
+                    st.dataframe(
+                        resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.dataframe(
+                        resumen.style.format({'Eficiencia_Total_%': '{:.1f}'}),
+                        use_container_width=True, hide_index=True
+                    )
+                excel_data_resumen_sup = to_excel(resumen)
+                if excel_data_resumen_sup:
+                    st.download_button(
+                        label=f"📥 Descargar {titulo_resumen}",
+                        data=excel_data_resumen_sup,
+                        file_name=f"principal_resumen_{agrupar_por.lower()}_{supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        key=f"principal_download_resumen"
+                    )
+            else:
+                st.info(f"No hay datos para generar el resumen por '{agrupar_por}'.")
+        else:
+            st.warning(f"La columna '{agrupar_por}' necesaria para el resumen no está disponible.")
         st.markdown("---")
-        st.subheader(f"Órdenes encontradas acumuladas ({len(st.session_state.datos_paso2_acumulado)}):")
-        df_p2_ordenado = reordenar_dataframe_para_salida(st.session_state.datos_paso2_acumulado)
-        st.dataframe(df_p2_ordenado, use_container_width=True, height=400)
+        st.subheader("🗂️ Tabla de Tickets (Estado más reciente de Nuevos Hoy)")
+        display_detail_table(
+            df_data_unicos_hoy=df_unicos, df_full_historial=df_full_historial,
+            role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
+            page_key="principal_sup", file_name_prefix="principal",
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        )
 
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 3: CLASIFICAR ---
-# ------------------------------------------------------------------------------
-with tab3:
-    st.header("Paso 3: Clasificar Órdenes No Encontradas")
-    if st.session_state.ordenes_no_encontradas:
-        st.warning(f"⚠️ Hay **{len(st.session_state.ordenes_no_encontradas)}** órdenes que no se encontraron.")
-        with st.form("form_no_encontradas"):
-            clasificaciones_actuales = {}
-            for orden in st.session_state.ordenes_no_encontradas:
-                clasificaciones_actuales[orden]=st.radio(f"`{orden}`:",["Mantener","Eliminar"],key=f"noenc_{orden}",horizontal=True, index=0)
-            if st.form_submit_button("✅ Procesar Clasificación",use_container_width=True):
-                eliminar=[o for o, c in clasificaciones_actuales.items() if c == "Eliminar"]
-                mantener = [o for o, c in clasificaciones_actuales.items() if c == "Mantener"]
-                if eliminar:
-                    with st.spinner(f"Eliminando {len(eliminar)} órdenes..."):
-                        h_completo=st.session_state.historial_cambios[~st.session_state.historial_cambios['OrdenExterna'].isin(eliminar)]
-                        try: h_completo.to_csv(ARCHIVO_HISTORIAL_CAMBIOS,sep=';',index=False)
-                        except Exception as e: st.warning(f"⚠️ Error CSV {ARCHIVO_HISTORIAL_CAMBIOS}: {e}")
-                        st.session_state.historial_cambios = h_completo
-                        
-                        if engine:
-                            try:
-                                query = text("DELETE FROM historial_cambios WHERE orden_externa IN :lista_ids")
-                                with engine.begin() as conn:
-                                    conn.execute(query, {"lista_ids": tuple(eliminar)})
-                            except Exception as e: st.warning(f"⚠️ Error Supabase (Eliminar P3): {e}")
-                        
-                        st.success(f"🗑️ {len(eliminar)} órdenes eliminadas.")
-                if mantener: st.info(f"✅ {len(mantener)} órdenes marcadas para **Mantener**.")
-                st.session_state.ordenes_no_encontradas=[]
-                st.rerun()
-    else: st.info("📌 No hay órdenes 'No Encontradas' por clasificar.")
+elif menu == "📊 Análisis PYMEs":
+    st.title(f"📊 Análisis PYMEs - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Mostrando tickets **nuevos de hoy** que son PYME.")
+    df_pymes = pd.DataFrame()
+    if df_unicos is not None and not df_unicos.empty and 'Es_PYME_Negocio' in df_unicos.columns:
+        df_pymes = df_unicos[df_unicos['Es_PYME_Negocio'] == True].copy()
+    render_dashboard_page(
+        title_prefix="Análisis PYMEs", df_page_data=df_pymes, df_full_historial=df_full_historial,
+        role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes",
+        reabiertos_set=set_casos_reabiertos,
+        df_head_count=df_head_count, # <-- PASANDO REABIERTOS
+        critical_metric_key='Pymes_Vencidos' # <-- Nueva métrica crítica para PYMEs
+    )
 
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 4: MONITOREO ---
-# ------------------------------------------------------------------------------
-with tab_monitoreo:
-    st.header("🔄 Monitoreo de Otros Estados")
-    st.info("Busca órdenes cuyo último estado NO sea 'Activo'/'Iniciado', basado en el Historial Completo.")
+elif menu == "⏰ Puntualidad":
+    st.title(f"⏰ Análisis de Puntualidad General - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Mostrando tickets **nuevos de hoy** con vencimiento 'Hoy'.")
+    hoy = pd.Timestamp.now().normalize()
+    df_puntuales = pd.DataFrame() # Este es el dataframe COMPLETO (sin filtrar)
+    if df_unicos is not None and not df_unicos.empty:
+        if 'OE_Vencimiento' in df_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_unicos['OE_Vencimiento']):
+            mask_fecha = df_unicos['OE_Vencimiento'].dt.normalize() == hoy
+            oe_venc_orig_str = df_unicos.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str)
+            mask_texto = oe_venc_orig_str.str.lower() == 'hoy'
+            df_puntuales = df_unicos[mask_fecha | mask_texto].copy()
+
+    # --- ¡LÓGICA MEJORADA! ---
     
-    lote_actual_mon = st.session_state.get('lote_actual', 0)
+    # 1. Definir los estados de "Citados"
+    estados_citados = ['pendiente de calendarizacion', 'calendarizado']
     
-    # --- LÓGICA DE PREPARACIÓN (Se usa en ambas pestañas) ---
-    historial_completo = st.session_state.historial_cambios
-    df_monitoreo_base = pd.DataFrame()
+    # 2. Crear el dataframe filtrado (EXCLUYENDO citados) solo para los KPIs
+    df_puntuales_filtrado = pd.DataFrame()
+    if not df_puntuales.empty and 'Estado' in df_puntuales.columns:
+        df_puntuales_filtrado = df_puntuales[
+            ~df_puntuales['Estado'].astype(str).isin(estados_citados)
+        ].copy()
+    elif not df_puntuales.empty:
+        df_puntuales_filtrado = df_puntuales.copy() # Fallback
+
+    # 3. Calcular KPIs para ANULAR (override)
+    # Los KPIs de 'Total', 'Pendientes', 'Manejado', 'Eficiencia' se calculan con los datos FILTRADOS
+    kpis_filtrados = calcular_kpis(df_puntuales_filtrado, df_full_historial)
     
-    if not historial_completo.empty:
+    # Los KPIs de 'Citados' (y otros) se calculan con los datos COMPLETOS
+    kpis_completos = calcular_kpis(df_puntuales, df_full_historial)
+    
+    # 4. Crear el diccionario de anulación
+    kpi_override_dict = {
+        'Total': kpis_filtrados.get('Total', 0),
+        'Pendientes': kpis_filtrados.get('Pendientes', 0),
+        'Manejados': kpis_filtrados.get('Manejados', 0),
+        'Eficiencia_Total_%': kpis_filtrados.get('Eficiencia_Total_%', 0.0),
+        # Tomar los citados del cálculo completo
+        'Citados': kpis_completos.get('Citados', 0) 
+    }
+
+    # 5. Llamar al renderizador con el dataframe COMPLETO (para la tabla)
+    #    y el diccionario de anulación (para los KPIs)
+    render_dashboard_page(
+        title_prefix="Puntualidad General", 
+        df_page_data=df_puntuales, # <-- ¡AQUÍ ESTÁ EL CAMBIO! (datos completos)
+        df_full_historial=df_full_historial,
+        role=st.session_state.user_role, 
+        role_supervisor_id=st.session_state.supervisor_id,
+        global_supervisor_sel=supervisor_sel, 
+        status_filter=estatus_sel, 
+        page_key="puntualidad", # La flag se activará con esto
+        reabiertos_set=set_casos_reabiertos,
+        df_head_count=df_head_count,
+        kpi_override=kpi_override_dict # <-- Anula los KPIs
+    )
+    # --- FIN DE LA NUEVA LÓGICA ---
+
+elif menu == "🎯 Citas Puntuales":
+    st.title(f"🎯 Análisis de Citas Puntuales - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Mostrando tickets **nuevos de hoy** que son Citas Puntuales.")
+    hoy = pd.Timestamp.now().normalize()
+    df_citas_actuales = pd.DataFrame()
+    df_citas_historicas = pd.DataFrame()
+    tickets_gestionados_ids = set()
+    required_cols_citas = ['Prioridad', 'Vence', 'Estado', 'OrdenExterna']
+    if df_unicos is not None and not df_unicos.empty and all(col in df_unicos.columns for col in required_cols_citas):
+        if 'Vence' in df_unicos.columns and pd.api.types.is_datetime64_any_dtype(df_unicos['Vence']):
+            df_citas_base = df_unicos.dropna(subset=['Vence']).copy()
+            mask_prioridad = df_citas_base['Prioridad'].astype(str) == '100'
+            mask_vencimiento_orig = df_citas_base.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str).str.lower() == 'vencida'
+            mask_vence_hoy = df_citas_base['Vence'].dt.normalize() == hoy
+            df_citas_actuales = df_citas_base[mask_prioridad & mask_vencimiento_orig & mask_vence_hoy]
+        estados_gestionados = ['pendiente de calendarizacion', 'calendarizado']
+        candidatos = df_unicos[df_unicos['Estado'].astype(str).isin(estados_gestionados)]['OrdenExterna'].unique()
+        required_hist_cols = ['OrdenExterna', 'Vence', 'Prioridad', 'OE_Vencimiento_Original']
+        if len(candidatos) > 0 and df_full_historial is not None and not df_full_historial.empty and all(c in df_full_historial.columns for c in required_hist_cols) and pd.api.types.is_datetime64_any_dtype(df_full_historial['Vence']):
+            historial_candidatos = df_full_historial[df_full_historial['OrdenExterna'].isin(candidatos)].copy()
+            if not historial_candidatos.empty:
+                prioridad_str = historial_candidatos.get('Prioridad', pd.Series(dtype=str)).fillna('').astype(str)
+                venc_orig_str = historial_candidatos.get('OE_Vencimiento_Original', pd.Series(dtype=str)).fillna('').astype(str).str.lower()
+                historial_candidatos['Vence'] = pd.to_datetime(historial_candidatos['Vence'], errors='coerce')
+                valid_vence_mask = historial_candidatos['Vence'].notna()
+                cumplen_historico = historial_candidatos[valid_vence_mask &
+                    (prioridad_str == '100') &
+                    (venc_orig_str == 'vencida') &
+                    (historial_candidatos.loc[valid_vence_mask, 'Vence'].dt.normalize() == hoy)
+                ]
+                tickets_gestionados_ids.update(cumplen_historico['OrdenExterna'].unique())
+        if tickets_gestionados_ids:
+            df_citas_historicas = df_unicos[df_unicos['OrdenExterna'].isin(tickets_gestionados_ids)]
+    if df_citas_actuales.empty and not df_citas_historicas.empty:
+        df_citas_actuales = pd.DataFrame(columns=df_citas_historicas.columns)
+    elif not df_citas_actuales.empty and df_citas_historicas.empty:
+        df_citas_historicas = pd.DataFrame(columns=df_citas_actuales.columns)
+    if not df_citas_actuales.empty or not df_citas_historicas.empty:
         try:
-            df_ultimo_estado = normalizar_timestamps(historial_completo).sort_values('Timestamp_Procesado', ascending=False).drop_duplicates('OrdenExterna', keep='first')
-            estados_a_excluir = ['activo', 'iniciado']
-            df_monitoreo_base = df_ultimo_estado[~df_ultimo_estado['Estado'].astype(str).str.strip().str.lower().isin(estados_a_excluir)]
+            cols = df_citas_actuales.columns.union(df_citas_historicas.columns)
+            df_citas_actuales = df_citas_actuales.reindex(columns=cols)
+            df_citas_historicas = df_citas_historicas.reindex(columns=cols)
+            df_citas = pd.concat([df_citas_actuales, df_citas_historicas]).drop_duplicates(subset=['OrdenExterna'], keep='first')
         except Exception as e:
-            st.error(f"Error al preparar datos base para monitoreo: {e}")
-    
-    
-    tab_mon_general, tab_mon_nuevos_hoy = st.tabs(["Monitoreo General (Último Estado)", "Monitoreo (Nuevos de Hoy)"])
-    
-    # --- PESTAÑA 1: MONITOREO GENERAL (LÓGICA ANTIGUA) ---
-    with tab_mon_general:
-        st.subheader("Monitoreo General (basado en Último Estado)")
-        
-        df_monitoreo_filtrado_gen = pd.DataFrame()
-        ids_monitoreo_gen = []
-        
-        if not df_monitoreo_base.empty:
-            try:
-                df_monitoreo_base_gen = df_monitoreo_base.copy()
-                df_monitoreo_base_gen['Fecha_Procesado'] = pd.to_datetime(df_monitoreo_base_gen['Timestamp_Procesado'], errors='coerce').dt.date
-                df_monitoreo_base_gen = df_monitoreo_base_gen.dropna(subset=['Fecha_Procesado'])
-                fechas_disponibles_gen = sorted(df_monitoreo_base_gen['Fecha_Procesado'].unique(), reverse=True)
-                
-                if fechas_disponibles_gen:
-                    fechas_disponibles_str_gen = [f.strftime('%Y-%m-%d') for f in fechas_disponibles_gen]
-                    key_multiselect_monitoreo_gen = f"filtro_fecha_monitoreo_gen_{len(fechas_disponibles_str_gen)}"
-                    
-                    fechas_seleccionadas_str_gen = st.multiselect("📅 Filtrar por Fecha de Último Estado:", options=fechas_disponibles_str_gen, default=fechas_disponibles_str_gen, key=key_multiselect_monitoreo_gen)
-                    
-                    if fechas_seleccionadas_str_gen:
-                        fechas_seleccionadas_gen = [datetime.strptime(f_str, '%Y-%m-%d').date() for f_str in fechas_seleccionadas_str_gen]
-                        df_monitoreo_filtrado_gen = df_monitoreo_base_gen[df_monitoreo_base_gen['Fecha_Procesado'].isin(fechas_seleccionadas_gen)]
-                    
-                    if not df_monitoreo_filtrado_gen.empty:
-                        ids_monitoreo_gen = sorted(df_monitoreo_filtrado_gen['OrdenExterna'].tolist())
-                        st.info(f"Mostrando **{len(df_monitoreo_filtrado_gen)}** tickets para monitorear (Lote {lote_actual_mon}).")
-                        st.text_area("📋 Copia IDs (General) y búscalas:", value=','.join(ids_monitoreo_gen), height=100, key="lista_buscar_monitoreo_gen")
-                    elif fechas_seleccionadas_str_gen:
-                        st.info("No hay órdenes para monitorear que coincidan con las fechas seleccionadas.")
-                else:
-                    st.success("🎉 ¡Excelente! No hay órdenes en otros estados registradas en el historial.")
-            except Exception as e:
-                st.error(f"Error al preparar datos para monitoreo general: {e}")
+            st.error(f"Error al combinar datos de citas: {e}")
+            df_citas = df_citas_actuales if not df_citas_actuales.empty else df_citas_historicas
+    else:
+        df_citas = pd.DataFrame()
+    render_dashboard_page(
+        title_prefix="Citas Puntuales", df_page_data=df_citas, df_full_historial=df_full_historial,
+        role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+        global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="citas",
+        df_head_count=df_head_count,
+        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+    )
+
+elif menu == "🔍 Tracking Ticket":
+    st.title(f"🔍 Tracking de Tickets - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Esta página busca en **todo el historial** de la base de datos, no solo en los tickets de hoy.")
+    st.markdown("---")
+    col_search1, col_search2 = st.columns([3, 1])
+    with col_search1:
+        ticket_busqueda = st.text_input(
+            "🎫 Ingresa el número de Orden Externa",
+            placeholder="Ejemplo: 12345678", key="ticket_search",
+            help="Buscar por número de Orden Externa exacto o parcial"
+        )
+    with col_search2:
+        buscar_exacto_placeholder = st.empty()
+    df_unicos_base_MASTER = obtener_datos_unicos(df_full_historial) if df_full_historial is not None else pd.DataFrame()
+    df_supervisor_unicos_MASTER = df_unicos_base_MASTER.copy() if df_unicos_base_MASTER is not None else pd.DataFrame()
+    supervisor_filter = None
+    if not df_supervisor_unicos_MASTER.empty:
+        if st.session_state.user_role == "supervisor":
+            supervisor_filter = st.session_state.supervisor_id
+            if 'Supervisor' in df_supervisor_unicos_MASTER.columns:
+                df_supervisor_unicos_MASTER = df_supervisor_unicos_MASTER[df_supervisor_unicos_MASTER['Supervisor'].astype(str) == str(supervisor_filter)]
+        elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
+            supervisor_filter = supervisor_sel
+            if 'Supervisor' in df_supervisor_unicos_MASTER.columns:
+                df_supervisor_unicos_MASTER = df_supervisor_unicos_MASTER[df_supervisor_unicos_MASTER['Supervisor'].astype(str) == str(supervisor_filter)]
+    if ticket_busqueda:
+        df_track = filtrar_dataframe_con_historial(
+            df_full_historial, df_supervisor_unicos_MASTER,
+            ticket_busqueda, supervisor_filter, None
+        )
+        if df_track is None or df_track.empty:
+            st.warning("⚠️ No se encontraron tickets con ese número de Orden Externa")
+            st.info("💡 **Sugerencias:**\n- Verifica que el número sea correcto\n- Asegúrate de que el ticket pertenece a tu supervisión (o selecciona 'Todos' si eres admin)")
         else:
-            st.info("📌 El historial completo está vacío o no hay tickets para monitorear.")
-        
-        # --- UI de guardado (General) ---
-        st.markdown("---")
-        st.subheader("Pegar y Guardar Resultados (General)")
-        col_m1_gen, col_m2_gen, col_m3_gen = st.columns([2, 2, 1])
-        with col_m1_gen:
-            if st.button("📋 Pegar Resultados (General)", type="primary", use_container_width=True, key="pegar_monitoreo_gen"):
-                texto = pyperclip.paste()
-                df_temp = procesar_texto_kunai_mejorado(texto)
-                if not df_temp.empty:
-                    st.session_state.datos_monitoreo_acumulado_gen = align_and_concat(st.session_state.datos_monitoreo_acumulado_gen, df_temp).drop_duplicates(subset=['OrdenExterna'], keep='last').reset_index(drop=True)
-                    st.success(f"✅ Agregados {len(df_temp)} resultados (General).")
-                else: st.warning("⚠️ No se procesaron datos válidos.")
-        with col_m2_gen:
-            if st.button("⚡ Guardar Cambios (General)", use_container_width=True, key="finalizar_monitoreo_gen", disabled=st.session_state.datos_monitoreo_acumulado_gen.empty):
-                with st.spinner(f"Guardando actualizaciones (Lote {lote_actual_mon})..."):
-                    df_encontradas_mon_gen = st.session_state.datos_monitoreo_acumulado_gen.copy()
-                    df_encontradas_mon_gen['Fuente_Paso'] = "Monitoreo"
-                    guardados_mon, sin_cambios_mon = guardar_en_historial_con_comparacion(df_encontradas_mon_gen, 'MONITOREO')
-                    
-                    ids_buscados_mon_gen = set(ids_monitoreo_gen) 
-                    ids_encontrados_mon_gen = set(df_encontradas_mon_gen['OrdenExterna'])
-                    st.session_state.ordenes_monitoreo_no_encontradas_gen = sorted(list(ids_buscados_mon_gen - ids_encontrados_mon_gen))
-                    
-                    st.success(f"✅ {guardados_mon} actualizaciones con cambios **añadidas** al Historial Completo (Lote {lote_actual_mon}).")
-                    if sin_cambios_mon > 0: st.info(f"ℹ️ {sin_cambios_mon} tickets sin cambios (no se guardaron).")
-                    if st.session_state.ordenes_monitoreo_no_encontradas_gen: st.warning(f"⚠️ **{len(st.session_state.ordenes_monitoreo_no_encontradas_gen)}** órdenes (General) NO estaban en los datos pegados.")
-                    else: st.success("🎉 ¡Todos los tickets (General) monitoreados fueron encontrados!")
-                    st.session_state.datos_monitoreo_acumulado_gen = pd.DataFrame()
-                    st.rerun()
-        with col_m3_gen:
-            if st.button("🗑️ Limpiar Acum. (General)", use_container_width=True, key="limpiar_monitoreo_gen", disabled=st.session_state.datos_monitoreo_acumulado_gen.empty):
-                st.session_state.datos_monitoreo_acumulado_gen = pd.DataFrame()
-                st.rerun()
-        
-        if not st.session_state.datos_monitoreo_acumulado_gen.empty:
-            st.markdown("---")
-            st.subheader(f"Resultados acumulados (General) ({len(st.session_state.datos_monitoreo_acumulado_gen)}):")
-            df_mon_acum_ordenado_gen = reordenar_dataframe_para_salida(st.session_state.datos_monitoreo_acumulado_gen)
-            st.dataframe(df_mon_acum_ordenado_gen, use_container_width=True, height=300)
-
-        # --- Clasificación de NO encontrados (General) ---
-        if st.session_state.get('ordenes_monitoreo_no_encontradas_gen', []):
-            st.markdown("---")
-            st.subheader("⚠️ Clasificar Desaparecidas (General)")
-            with st.form("form_monitoreo_no_encontradas_gen"):
-                clasificaciones_mon_actuales_gen = {}
-                for orden in st.session_state.ordenes_monitoreo_no_encontradas_gen:
-                    clasificaciones_mon_actuales_gen[orden] = st.radio(f"`{orden}`:", ["Mantener", "Eliminar"], key=f"mon_noenc_gen_{orden}", horizontal=True, index=0)
-                if st.form_submit_button("✅ Procesar Clasificación (General)"):
-                    eliminar_mon = [o for o, c in clasificaciones_mon_actuales_gen.items() if c == "Eliminar"]
-                    mantener_mon = [o for o, c in clasificaciones_mon_actuales_gen.items() if c == "Mantener"]
-                    if eliminar_mon:
-                        with st.spinner(f"Eliminando {len(eliminar_mon)} órdenes (monitoreo gen)..."):
-                            h_completo_mon=st.session_state.historial_cambios[~st.session_state.historial_cambios['OrdenExterna'].isin(eliminar_mon)]
-                            try: h_completo_mon.to_csv(ARCHIVO_HISTORIAL_CAMBIOS, sep=';', index=False)
-                            except Exception as e: st.warning(f"⚠️ Error CSV {ARCHIVO_HISTORIAL_CAMBIOS}: {e}")
-                            
-                            st.session_state.historial_cambios = h_completo_mon
-                            
-                            if engine:
-                                try:
-                                    query_mon = text("DELETE FROM historial_cambios WHERE orden_externa IN :lista_ids")
-                                    with engine.begin() as conn:
-                                        conn.execute(query_mon, {"lista_ids": tuple(eliminar_mon)})
-                                except Exception as e: st.warning(f"⚠️ Error Supabase (Eliminar Mon Gen): {e}")
-                                
-                            st.success(f"🗑️ Eliminadas {len(eliminar_mon)} órdenes (monitoreo gen).")
-                    if mantener_mon: st.info(f"✅ {len(mantener_mon)} órdenes (monitoreo gen) **mantenidas**.")
-                    st.session_state.ordenes_monitoreo_no_encontradas_gen = []
-                    st.rerun()
-
-
-    # --- PESTAÑA 2: MONITOREO (NUEVOS DE HOY) ---
-    with tab_mon_nuevos_hoy:
-        st.subheader("Monitoreo de Tickets 'Nuevos de Hoy'")
-        st.info("Muestra tickets cuyo primer registro (Fecha_Nacimiento) fue hoy, pero su último estado NO es 'Activo' o 'Iniciado'.")
-        
-        df_monitoreo_nuevos_hoy = pd.DataFrame()
-        ids_monitoreo_nuevos_hoy = []
-        
-        if not df_monitoreo_base.empty and 'Fecha_Nacimiento' in df_monitoreo_base.columns:
-            try:
-                hoy = date.today()
-                df_monitoreo_base['Fecha_Nacimiento'] = pd.to_datetime(df_monitoreo_base['Fecha_Nacimiento'], errors='coerce')
-                df_monitoreo_nuevos_hoy = df_monitoreo_base[df_monitoreo_base['Fecha_Nacimiento'].dt.date == hoy]
-                
-                if not df_monitoreo_nuevos_hoy.empty:
-                    ids_monitoreo_nuevos_hoy = sorted(df_monitoreo_nuevos_hoy['OrdenExterna'].tolist())
-                    st.info(f"Mostrando **{len(df_monitoreo_nuevos_hoy)}** tickets 'Nuevos de Hoy' para monitorear (Lote {lote_actual_mon}).")
-                    st.text_area("📋 Copia IDs (Nuevos de Hoy) y búscalas:", value=','.join(ids_monitoreo_nuevos_hoy), height=100, key="lista_buscar_monitoreo_nuevos_hoy")
+            num_unicos = df_track['OrdenExterna'].nunique()
+            st.success(f"✅ {num_unicos} ticket(s) único(s) encontrado(s).")
+            for orden_externa in df_track['OrdenExterna'].unique():
+                ts_col_valid_track = ('Timestamp_Procesado' in df_track.columns and
+                                        pd.api.types.is_datetime64_any_dtype(df_track['Timestamp_Procesado']))
+                if ts_col_valid_track:
+                    historial_ticket = df_track[df_track['OrdenExterna'] == orden_externa].sort_values('Timestamp_Procesado', ascending=False, na_position='last')
                 else:
-                    st.success("🎉 No hay tickets 'Nuevos de Hoy' que requieran monitoreo (ej. ya están cerrados, etc.).")
-            except Exception as e:
-                st.error(f"Error al filtrar tickets 'Nuevos de Hoy': {e}")
-        elif df_monitoreo_base.empty:
-            st.info("📌 No hay tickets que requieran monitoreo general.")
-        else:
-            st.error("❌ No se pudo calcular la 'Fecha_Nacimiento' en el historial. No se puede filtrar por 'Nuevos de Hoy'.")
-
-        # --- UI de guardado (Nuevos de Hoy) ---
-        st.markdown("---")
-        st.subheader("Pegar y Guardar Resultados (Nuevos de Hoy)")
-        col_m1_hoy, col_m2_hoy, col_m3_hoy = st.columns([2, 2, 1])
-        with col_m1_hoy:
-            if st.button("📋 Pegar Resultados (Nuevos de Hoy)", type="primary", use_container_width=True, key="pegar_monitoreo_hoy"):
-                texto = pyperclip.paste()
-                df_temp = procesar_texto_kunai_mejorado(texto)
-                if not df_temp.empty:
-                    st.session_state.datos_monitoreo_acumulado_hoy = align_and_concat(st.session_state.datos_monitoreo_acumulado_hoy, df_temp).drop_duplicates(subset=['OrdenExterna'], keep='last').reset_index(drop=True)
-                    st.success(f"✅ Agregados {len(df_temp)} resultados (Nuevos de Hoy).")
-                else: st.warning("⚠️ No se procesaron datos válidos.")
-        with col_m2_hoy:
-            if st.button("⚡ Guardar Cambios (Nuevos de Hoy)", use_container_width=True, key="finalizar_monitoreo_hoy", disabled=st.session_state.datos_monitoreo_acumulado_hoy.empty):
-                with st.spinner(f"Guardando actualizaciones (Lote {lote_actual_mon})..."):
-                    df_encontradas_mon_hoy = st.session_state.datos_monitoreo_acumulado_hoy.copy()
-                    df_encontradas_mon_hoy['Fuente_Paso'] = "Monitoreo"
-                    guardados_mon, sin_cambios_mon = guardar_en_historial_con_comparacion(df_encontradas_mon_hoy, 'MONITOREO')
-                    
-                    ids_buscados_mon_hoy = set(ids_monitoreo_nuevos_hoy)
-                    ids_encontrados_mon_hoy = set(df_encontradas_mon_hoy['OrdenExterna'])
-                    st.session_state.ordenes_monitoreo_no_encontradas_hoy = sorted(list(ids_buscados_mon_hoy - ids_encontrados_mon_hoy))
-                    
-                    st.success(f"✅ {guardados_mon} actualizaciones con cambios **añadidas** al Historial Completo (Lote {lote_actual_mon}).")
-                    if sin_cambios_mon > 0: st.info(f"ℹ️ {sin_cambios_mon} tickets sin cambios (no se guardaron).")
-                    if st.session_state.ordenes_monitoreo_no_encontradas_hoy: st.warning(f"⚠️ **{len(st.session_state.ordenes_monitoreo_no_encontradas_hoy)}** órdenes (Nuevos de Hoy) NO estaban en los datos pegados.")
-                    else: st.success("🎉 ¡Todos los tickets (Nuevos de Hoy) monitoreados fueron encontrados!")
-                    st.session_state.datos_monitoreo_acumulado_hoy = pd.DataFrame()
-                    st.rerun()
-        with col_m3_hoy:
-            if st.button("🗑️ Limpiar Acum. (Nuevos de Hoy)", use_container_width=True, key="limpiar_monitoreo_hoy", disabled=st.session_state.datos_monitoreo_acumulado_hoy.empty):
-                st.session_state.datos_monitoreo_acumulado_hoy = pd.DataFrame()
-                st.rerun()
-        
-        if not st.session_state.datos_monitoreo_acumulado_hoy.empty:
-            st.markdown("---")
-            st.subheader(f"Resultados acumulados (Nuevos de Hoy) ({len(st.session_state.datos_monitoreo_acumulado_hoy)}):")
-            df_mon_acum_ordenado_hoy = reordenar_dataframe_para_salida(st.session_state.datos_monitoreo_acumulado_hoy)
-            st.dataframe(df_mon_acum_ordenado_hoy, use_container_width=True, height=300)
-
-        # --- Clasificación de NO encontrados (Nuevos de Hoy) ---
-        if st.session_state.get('ordenes_monitoreo_no_encontradas_hoy', []):
-            st.markdown("---")
-            st.subheader("⚠️ Clasificar Desaparecidas (Nuevos de Hoy)")
-            with st.form("form_monitoreo_no_encontradas_hoy"):
-                clasificaciones_mon_actuales_hoy = {}
-                for orden in st.session_state.ordenes_monitoreo_no_encontradas_hoy:
-                    clasificaciones_mon_actuales_hoy[orden] = st.radio(f"`{orden}`:", ["Mantener", "Eliminar"], key=f"mon_noenc_hoy_{orden}", horizontal=True, index=0)
-                if st.form_submit_button("✅ Procesar Clasificación (Nuevos de Hoy)"):
-                    eliminar_mon = [o for o, c in clasificaciones_mon_actuales_hoy.items() if c == "Eliminar"]
-                    mantener_mon = [o for o, c in clasificaciones_mon_actuales_hoy.items() if c == "Mantener"]
-                    if eliminar_mon:
-                        with st.spinner(f"Eliminando {len(eliminar_mon)} órdenes (monitoreo hoy)..."):
-                            h_completo_mon=st.session_state.historial_cambios[~st.session_state.historial_cambios['OrdenExterna'].isin(eliminar_mon)]
-                            try: h_completo_mon.to_csv(ARCHIVO_HISTORIAL_CAMBIOS, sep=';', index=False)
-                            except Exception as e: st.warning(f"⚠️ Error CSV {ARCHIVO_HISTORIAL_CAMBIOS}: {e}")
-                            
-                            st.session_state.historial_cambios = h_completo_mon
-                            
-                            if engine:
+                    historial_ticket = df_track[df_track['OrdenExterna'] == orden_externa]
+                if not historial_ticket.empty:
+                    ticket_data = historial_ticket.iloc[0]
+                else:
+                    continue
+                with st.container(border=True):
+                    col_header1, col_header2, col_header3, col_header4 = st.columns([2, 1, 1, 1])
+                    with col_header1:
+                        st.markdown(f"### 🎫 Ticket: **{orden_externa}**")
+                    with col_header2:
+                        color_estado = get_color_estado(str(ticket_data.get('Estado', 'N/A')))
+                        st.markdown(f"<div style='text-align: center; background-color: {color_estado}; color: white; padding: 8px; border-radius: 5px; font-weight: bold;'>{str(ticket_data.get('Estado', 'N/A')).upper()}</div>", unsafe_allow_html=True)
+                    with col_header3:
+                        es_pyme = ticket_data.get('Es_PYME_Negocio', False)
+                        if es_pyme:
+                            st.markdown("<div style='text-align: center; padding: 8px; border-radius: 5px; font-weight: bold; background-color: #2a2a4a;'>🏢 PYME</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("<div style='text-align: center; padding: 8px; border-radius: 5px; font-weight: bold; background-color: #2a2a4a;'>👤 Regular</div>", unsafe_allow_html=True)
+                    with col_header4:
+                        if ticket_data.get('Vencido', False) and es_pyme:
+                            st.markdown("<div style='text-align: center; background-color: #DC143C; color: white; padding: 8px; border-radius: 5px; font-weight: bold;'>⚠️ VENCIDO</div>", unsafe_allow_html=True)
+                        elif es_pyme:
+                            st.markdown("<div style='text-align: center; background-color: #32CD32; color: white; padding: 8px; border-radius: 5px; font-weight: bold;'>⏱️ En Tiempo</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("<div style='text-align: center; padding: 8px; border-radius: 5px; font-weight: bold; background-color: #2a2a4a;'>📊 Normal</div>", unsafe_allow_html=True)
+                    st.markdown("---")
+                    col_main1, col_main2 = st.columns(2)
+                    with col_main1:
+                        st.markdown("#### 📋 Información General")
+                        info_general = {
+                            "🆔 Orden Externa": str(ticket_data.get('OrdenExterna', 'N/A')),
+                            "👤 Cliente": str(ticket_data.get('Cliente', 'N/A')),
+                            "🏢 Tipo Cliente": str(ticket_data.get('Tipo_Cliente', 'N/A')),
+                            "👨‍💼 Supervisor": str(ticket_data.get('Supervisor', 'N/A')),
+                            "👨‍🔧 Asignado A": str(ticket_data.get('Asignado_A', 'N/A')),
+                            "📍 Ubicación": f"{ticket_data.get('Municipio', 'N/A')}, {ticket_data.get('Provincia', 'N/A')}"
+                        }
+                        for campo, valor in info_general.items():
+                            st.text(f"{campo}: {valor}")
+                    with col_main2:
+                        st.markdown("#### ⏰ Timeline del Ticket")
+                        fecha_creacion = ticket_data.get('Creado')
+                        fecha_oe_creacion = ticket_data.get('OE_Creacion')
+                        fecha_vence = ticket_data.get('Vence en')
+                        timeline_info = {
+                            "📅 Creado": formatear_fecha(fecha_creacion),
+                            "🚀 OE Creación": formatear_fecha(fecha_oe_creacion),
+                            "⏳ Tiempo Transcurrido": calcular_tiempo_transcurrido(fecha_oe_creacion),
+                        }
+                        if es_pyme and pd.notna(fecha_vence):
+                            timeline_info["⏰ Vence/Venció"] = formatear_fecha(fecha_vence)
+                            ahora = datetime.now()
+                            if not isinstance(fecha_vence, pd.Timestamp):
+                                fecha_vence = pd.to_datetime(fecha_vence, errors='coerce')
+                            if pd.notna(fecha_vence):
                                 try:
-                                    query_mon = text("DELETE FROM historial_cambios WHERE orden_externa IN :lista_ids")
-                                    with engine.begin() as conn:
-                                        conn.execute(query_mon, {"lista_ids": tuple(eliminar_mon)})
-                                except Exception as e: st.warning(f"⚠️ Error Supabase (Eliminar Mon Hoy): {e}")
-                                
-                            st.success(f"🗑️ Eliminadas {len(eliminar_mon)} órdenes (monitoreo hoy).")
-                    if mantener_mon: st.info(f"✅ {len(mantener_mon)} órdenes (monitoreo hoy) **mantenidas**.")
-                    st.session_state.ordenes_monitoreo_no_encontradas_hoy = []
-                    st.rerun()
-
-
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 5: CORRECCIÓN MANUAL ---
-# ------------------------------------------------------------------------------
-with tab_correccion:
-    st.header("🔧 Corrección Manual / Adición")
-    st.warning("⚠️ **Precaución:** Añade registros directamente al historial completo con el Lote actual.")
-    lote_actual_corr = st.session_state.get('lote_actual', 0)
-    st.info(f"Registros añadidos aquí se guardarán con **Lote {lote_actual_corr}**.")
-    tipo_evento_manual = st.selectbox( "**1. Selecciona Tipo de Evento:**", ['NUEVO', 'CAMBIO', 'ENCONTRADO', 'MONITOREO', 'ACTIVO'], key="tipo_evento_manual_corr", help="Define cómo se registrará.")
-    col_c1, col_c2, col_c3 = st.columns([2, 2, 1])
-    with col_c1:
-        if st.button("📋 Pegar y Agregar Datos", type="primary", use_container_width=True, key="pegar_corr"):
-            texto = pyperclip.paste()
-            df_temp = procesar_texto_kunai_mejorado(texto)
-            if not df_temp.empty:
-                st.session_state.datos_correccion_acumulado = align_and_concat(st.session_state.datos_correccion_acumulado, df_temp).drop_duplicates(subset=['OrdenExterna'], keep='last').reset_index(drop=True)
-                st.success(f"✅ Agregados {len(df_temp)}. Total pendientes: {len(st.session_state.datos_correccion_acumulado)}")
-            else: st.warning("⚠️ No se procesaron datos válidos.")
-    with col_c2:
-        if st.button("⚡ Guardar Adición Manual", use_container_width=True, key="guardar_corr", disabled=st.session_state.datos_correccion_acumulado.empty or not tipo_evento_manual):
-            with st.spinner(f"Guardando adición manual (Lote {lote_actual_corr})..."):
-                df_correccion = st.session_state.datos_correccion_acumulado.copy()
-                df_correccion['Fuente_Paso'] = "Corrección Manual"
-                df_correccion['Tipo_Evento'] = tipo_evento_manual
-                if 'Timestamp_Procesado' not in df_correccion.columns or df_correccion['Timestamp_Procesado'].isnull().all():
-                    df_correccion['Timestamp_Procesado'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                df_correccion = normalizar_timestamps(df_correccion)
-                guardados = guardar_correccion_manual(df_correccion)
-                if guardados > 0:
-                    st.success(f"✅ Adición manual guardada. Se **añadieron {guardados}** eventos al Historial Completo (Lote {lote_actual_corr}).")
-                    st.session_state.datos_correccion_acumulado = pd.DataFrame()
-                    st.rerun()
-                else: st.error("❌ No se pudo guardar la adición manual.")
-    with col_c3:
-        if st.button("🗑️ Limpiar Acum. Corrección", use_container_width=True, key="limpiar_corr", disabled=st.session_state.datos_correccion_acumulado.empty):
-            st.session_state.datos_correccion_acumulado = pd.DataFrame()
-            st.rerun()
-    if not st.session_state.datos_correccion_acumulado.empty:
+                                    ahora_naive = get_current_ast_time()
+                                    fecha_vence_naive = fecha_vence.tz_convert(None) if hasattr(fecha_vence, 'tzinfo') and fecha_vence.tzinfo is not None else fecha_vence.replace(tzinfo=None)
+                                    if ahora_naive < fecha_vence_naive:
+                                        tiempo_restante = fecha_vence_naive - ahora_naive
+                                        horas_restantes = int(tiempo_restante.total_seconds() // 3600)
+                                        minutos_restantes = int((tiempo_restante.total_seconds() % 3600) // 60)
+                                        timeline_info["⏱️ Tiempo Restante"] = f"{horas_restantes}h {minutos_restantes}m"
+                                    else:
+                                        tiempo_vencido = ahora_naive - fecha_vence_naive
+                                        horas_vencidas = int(tiempo_vencido.total_seconds() // 3600)
+                                        minutos_vencidos = int((tiempo_vencido.total_seconds() % 3600) // 60)
+                                        timeline_info["🚨 Tiempo Vencido"] = f"{horas_vencidas}h {minutos_vencidos}m"
+                                except Exception as e:
+                                    timeline_info["⚠️ Error Cálculo Tiempo"] = "Verificar Fechas"
+                        for campo, valor in timeline_info.items():
+                            if "Vencido" in campo and "🚨" in campo:
+                                st.error(f"{campo}: {valor}")
+                            elif "Restante" in campo:
+                                st.success(f"{campo}: {valor}")
+                            else:
+                                st.text(f"{campo}: {valor}")
+                    st.markdown("---")
+                    with st.expander("Ver Historial de Cambios 📜"):
+                        df_display_track = formatear_para_display(historial_ticket)
+                        st.dataframe(df_display_track, use_container_width=True, hide_index=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
+    else:
+        st.info("🔍 **Instrucciones de uso:**")
+        col_inst1, col_inst2 = st.columns(2)
+        with col_inst1:
+            st.markdown("""
+            **📋 Cómo usar el Tracking:**
+            1. Ingresa el número de Orden Externa en el campo de búsqueda.
+            2. El sistema buscará en **todo el historial de la base de datos**.
+            3. Revisa la tarjeta con el estado **más reciente** encontrado (de cualquier fecha).
+            4. Expande "Ver Historial de Cambios" para ver **todos** los registros de ese ticket.
+            """)
+        with col_inst2:
+            st.markdown("""
+            **💡 Consejos:**
+            - La búsqueda es parcial.
+            - Los tickets PYME se destacan con colores.
+            - El historial muestra todos los cambios detectados (hoy, ayer, etc.).
+            """)
         st.markdown("---")
-        st.subheader(f"Tickets pendientes ({len(st.session_state.datos_correccion_acumulado)}):")
-        df_corr_acum_ordenado = reordenar_dataframe_para_salida(st.session_state.datos_correccion_acumulado)
-        st.dataframe(df_corr_acum_ordenado, use_container_width=True, height=300)
+        st.subheader("🕐 Tickets Recientes (Últimos 10 cambios en historial completo)")
+        tickets_recientes_base = pd.DataFrame()
+        if not df_supervisor_unicos_MASTER.empty and 'OrdenExterna' in df_supervisor_unicos_MASTER.columns:
+            ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
+            tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
+        elif st.session_state.user_role == "admin" and supervisor_sel == "Todos":
+                tickets_recientes_base = df_full_historial.copy()
+        elif not df_supervisor_unicos_MASTER.empty:
+                ids_del_supervisor = set(df_supervisor_unicos_MASTER['OrdenExterna'].unique())
+                tickets_recientes_base = df_full_historial[df_full_historial['OrdenExterna'].isin(ids_del_supervisor)].copy()
+        
+        tickets_recientes = pd.DataFrame()
+        if not tickets_recientes_base.empty and 'Timestamp_Procesado' in tickets_recientes_base.columns and pd.api.types.is_datetime64_any_dtype(tickets_recientes_base['Timestamp_Procesado']):
+            tickets_recientes = tickets_recientes_base.sort_values('Timestamp_Procesado', ascending=False, na_position='last').head(10)
+        elif not tickets_recientes_base.empty:
+            tickets_recientes = tickets_recientes_base.tail(10)
+            
+        if not tickets_recientes.empty:
+            tabla_recientes = []
+            for _, ticket in tickets_recientes.iterrows():
+                tabla_recientes.append({
+                    'Orden Externa': ticket.get('OrdenExterna'),
+                    'Estado': ticket.get('Estado', 'N/A'),
+                    'Supervisor': ticket.get('Supervisor', 'N/A'),
+                    'PYME': '🏢' if ticket.get('Es_PYME_Negocio') else '👤',
+                    'Timestamp': formatear_fecha(ticket.get('Timestamp_Procesado')),
+                    'Tipo Evento': ticket.get('Tipo_Evento', 'N/A')
+                })
+            df_tabla_recientes = pd.DataFrame(tabla_recientes)
+            st.dataframe(df_tabla_recientes, use_container_width=True, hide_index=True)
+        else:
+            st.warning("No hay tickets recientes disponibles para este supervisor.")
 
+elif menu == "📅 Antiguas":
+    st.title(f"📅 Análisis de Antigüedad - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Mostrando tickets **nuevos de hoy** que cumplen criterios de antigüedad (basado en 'OE_Creacion').")
+    hoy = pd.Timestamp.now().normalize()
+    tab1, tab2 = st.tabs(["📅 Antigüedad 3 Días", "⚠️ Antigüedad Extrema (+3 días)"])
+    df_unicos_antiguedad = pd.DataFrame()
+    if df_unicos is not None and not df_unicos.empty and 'OE_Creacion' in df_unicos.columns:
+        df_copy = df_unicos.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df_copy['OE_Creacion']):
+            df_copy['OE_Creacion'] = pd.to_datetime(df_copy['OE_Creacion'], errors='coerce')
+        df_unicos_antiguedad = df_copy.dropna(subset=['OE_Creacion'])
+    with tab1:
+        fecha_objetivo = hoy - timedelta(days=3)
+        df_3_dias = pd.DataFrame()
+        if not df_unicos_antiguedad.empty:
+            if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
+                df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
+        render_dashboard_page(
+            title_prefix="Antigüedad 3 Días", df_page_data=df_3_dias, df_full_historial=df_full_historial,
+            role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="antiguas_3_dias",
+            df_head_count=df_head_count,
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        )
+    with tab2:
+        fecha_limite = hoy - timedelta(days=3)
+        df_extrema = pd.DataFrame()
+        if not df_unicos_antiguedad.empty:
+            if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
+                df_extrema = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() < fecha_limite]
+        render_dashboard_page(
+            title_prefix="Antigüedad Extrema", df_page_data=df_extrema, df_full_historial=df_full_historial,
+            role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
+            page_key="antiguas_extrema", critical_metric_key='Total',
+            df_head_count=df_head_count,
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        )
 
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 6: REABIERTOS ---
-# ------------------------------------------------------------------------------
-with tab_reabiertos:
-    st.header("🔄 Cargar Casos Reabiertos")
+elif menu == "📈 Rendimiento":
+    st.title(f"📈 Análisis de Rendimiento - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Esta página filtra los tickets **nuevos de hoy** por la fecha y hora en que fueron PROCESADOS.")
+    col_date1, col_date2 = st.columns(2)
+    fecha_hoy = get_current_ast_time().date()
+    fecha_inicio_seleccionada = col_date1.date_input("Fecha Inicio", fecha_hoy)
+    fecha_fin_seleccionada = col_date2.date_input("Fecha Fin", fecha_hoy)
+    hora_inicio = col_date1.time_input("Hora Inicio", time(0, 0))
+    hora_fin = col_date2.time_input("Hora Fin", time(23, 59, 59))
+    dt_inicio = datetime.combine(fecha_inicio_seleccionada, hora_inicio)
+    dt_fin = datetime.combine(fecha_fin_seleccionada, hora_fin)
+    df_rendimiento = pd.DataFrame()
+    if df_unicos is not None and not df_unicos.empty and 'Timestamp_Procesado' in df_unicos.columns:
+        df_rendimiento_base = df_unicos.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df_rendimiento_base['Timestamp_Procesado']):
+            df_rendimiento_base['Timestamp_Procesado'] = pd.to_datetime(df_rendimiento_base['Timestamp_Procesado'], errors='coerce')
+        df_rendimiento_base = df_rendimiento_base.dropna(subset=['Timestamp_Procesado']) 
+        try:
+            if dt_inicio <= dt_fin:
+                if df_rendimiento_base['Timestamp_Procesado'].dt.tz is not None:
+                    df_rendimiento_base['Timestamp_Procesado'] = df_rendimiento_base['Timestamp_Procesado'].dt.tz_convert(None)
+                df_rendimiento = df_rendimiento_base[
+                    (df_rendimiento_base['Timestamp_Procesado'] >= dt_inicio) & 
+                    (df_rendimiento_base['Timestamp_Procesado'] <= dt_fin) 
+                ].copy()
+            else:
+                st.error("La fecha/hora de inicio no puede ser posterior a la fecha/hora de fin.")
+                df_rendimiento = pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error al procesar fechas para Rendimiento: {e}")
+            df_rendimiento = pd.DataFrame()
+    if df_rendimiento.empty:
+        st.warning("No hay datos en el rango de fecha/hora seleccionado con los filtros actuales.")
+    else:
+        render_dashboard_page(
+            title_prefix="Rendimiento", df_page_data=df_rendimiento, df_full_historial=df_full_historial,
+            role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
+            global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
+            page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin,
+            df_head_count=df_head_count,
+            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        )
+
+# --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.4 (CON FILTRO INDEPENDIENTE Y CORRECCIÓN DE ROL) ---
+elif menu == "🔄 Reabiertos":
+    
+    # 1. Título (ahora dinámico para el rol de supervisor)
+    if st.session_state.user_role == "supervisor":
+        st.title(f"🔄 Análisis de Reabiertos - {st.session_state.supervisor_id}")
+    else:
+        st.title(f"🔄 Análisis de Reabiertos")
+
     st.info("""
-    Pega aquí los datos de reabiertos que limpias en Excel.
-    - Asegúrate de copiar las **7 columnas** en este orden: 
-    `caso`, `codigo`, `tarjeta`, `supervisor` (nombre), `fecha`, `condicion`, `tarjeta_supervisor` (ID).
-    - El sistema guardará los datos tal cual los pegues.
+    Esta página compara la tabla `reabiertos` (columna `caso`) contra el historial de `historial_cambios` (columna `OrdenExterna`).
+    
+    Muestra **solo** los casos de 'reabiertos' que actualmente se encuentran en estado **'activo'** o **'iniciado'** en KUNAI (de CUALQUIER fecha).
+    Los resultados se ordenan por la fecha más reciente del reporte de 'reabiertos'.
     """)
     
-    COLUMNAS_REABIERTOS = ['caso', 'codigo', 'tarjeta', 'supervisor', 'fecha', 'condicion', 'tarjeta_supervisor']
-    
-    col_r1, col_r2, col_r3 = st.columns([2, 2, 1])
+    if df_full_historial is None or df_full_historial.empty or df_reabiertos_full is None or df_reabiertos_full.empty:
+        st.warning("No se pudieron cargar los datos de 'historial_cambios' o 'reabiertos' para el análisis.")
+    else:
+        
+        # 2. Obtener TODAS las coincidencias
+        df_coincidencias_TODAS = analizar_reabiertos(df_full_historial, df_reabiertos_full)
 
-    with col_r1:
-        if st.button("📋 Pegar y Acumular Reabiertos", type="primary", use_container_width=True, key="pegar_reabiertos"):
-            texto = pyperclip.paste()
-            df_temp = procesar_pegado_simple(texto, COLUMNAS_REABIERTOS) 
-            
-            if not df_temp.empty:
-                st.session_state.datos_reabiertos_acumulado = pd.concat(
-                    [st.session_state.datos_reabiertos_acumulado, df_temp],
-                    ignore_index=True
-                ).drop_duplicates(keep='last')
-                st.success(f"✅ Agregadas {len(df_temp)} filas. Total acumulado: {len(st.session_state.datos_reabiertos_acumulado)}")
+        # 3. Pre-filtrar por ROL (Si es supervisor, solo ve lo suyo)
+        df_coincidencias_ROL = df_coincidencias_TODAS.copy()
+        
+        # ***** INICIO DE LA CORRECCIÓN v2.7.4 *****
+        if st.session_state.user_role == "supervisor":
+            # Comparamos con 'tarjeta_supervisor' (minúscula)
+            if 'tarjeta_supervisor' in df_coincidencias_ROL.columns: 
+                df_coincidencias_ROL = df_coincidencias_ROL[
+                    df_coincidencias_ROL['tarjeta_supervisor'].astype(str) == str(st.session_state.supervisor_id)
+                ]
+            else:
+                # Si la columna no existiera, se vacía para evitar mostrar datos incorrectos
+                st.warning("Columna 'tarjeta_supervisor' no encontrada en 'reabiertos'. El filtro de supervisor no funcionará.")
+                df_coincidencias_ROL = df_coincidencias_ROL.iloc[0:0] 
+        # ***** FIN DE LA CORRECCIÓN v2.7.4 *****
 
-    with col_r2:
-        if st.button("⚡ Guardar Reabiertos en BD", use_container_width=True, key="guardar_reabiertos",
-                    disabled=st.session_state.datos_reabiertos_acumulado.empty):
-            with st.spinner("Guardando reabiertos en Supabase y CSV..."):
-                df_para_guardar = st.session_state.datos_reabiertos_acumulado.copy()
-                
-                # --- v2.9.0: Usando la nueva función genérica ---
-                guardados = guardar_datos_persistentes(
-                    df_para_guardar,
-                    'reabiertos',
-                    ARCHIVO_REABIERTOS,
-                    'reabiertos'
-                    # No se pasa p_key para que se comporte como 'append' simple
-                ) 
-                
-                if guardados > 0:
-                    st.success(f"✅ ¡Guardado! Se **añadieron {guardados}** registros al historial 'reabiertos'.")
-                    st.session_state.datos_reabiertos_acumulado = pd.DataFrame()
-                    st.rerun()
-                else:
-                    st.error("❌ No se pudo guardar los datos de reabiertos.")
-
-    with col_r3:
-        if st.button("🗑️ Limpiar Acum. Reabiertos", use_container_width=True, key="limpiar_reabiertos",
-                    disabled=st.session_state.datos_reabiertos_acumulado.empty):
-            st.session_state.datos_reabiertos_acumulado = pd.DataFrame()
-            st.rerun()
-    
-    if not st.session_state.datos_reabiertos_acumulado.empty:
+        # 4. Crear el NUEVO filtro de supervisor LOCAL (en la página)
+        supervisor_options_reabiertos = ["Todos"]
+        # Usamos la columna 'supervisor' (nombres) para poblar el filtro
+        if not df_coincidencias_ROL.empty and 'supervisor' in df_coincidencias_ROL.columns:
+            supervisores_validos_reabiertos = sorted([str(s) for s in df_coincidencias_ROL['supervisor'].dropna().unique() if str(s).strip()])
+            supervisor_options_reabiertos.extend(supervisores_validos_reabiertos)
+        
         st.markdown("---")
-        st.metric("Filas Acumuladas para Guardar", len(st.session_state.datos_reabiertos_acumulado))
         
-        cols_display_reab = ['caso', 'codigo', 'tarjeta', 'supervisor', 'tarjeta_supervisor', 'fecha', 'condicion']
-        cols_existentes = [col for col in cols_display_reab if col in st.session_state.datos_reabiertos_acumulado.columns]
-        st.dataframe(st.session_state.datos_reabiertos_acumulado[cols_existentes], use_container_width=True, height=400)
-
-
-# ------------------------------------------------------------------------------
-# --- v2.9.0: PESTAÑA 7: HEAD COUNT TÉCNICOS ---
-# ------------------------------------------------------------------------------
-with tab_hc_tecnicos:
-    st.header("🧑‍🔧 Head Count - Técnicos")
-    
-    COLUMNAS_HC_TECNICOS = ['ficha', 'tarjeta', 'nombre', 'telefono', 'funcion', 'supervisor']
-    df_actual_tecnicos = st.session_state.get('head_count_tecnicos', pd.DataFrame())
-    
-    # Asegurar el orden de las columnas para mostrar
-    if not df_actual_tecnicos.empty:
-        df_actual_tecnicos = df_actual_tecnicos[COLUMNAS_HC_TECNICOS]
-
-    tab_carga_rapida, tab_crud = st.tabs(["Carga Rápida (Pegar)", "Gestión Manual (CRUD)"])
-
-    # --- Sub-pestaña 1: Carga Rápida ---
-    with tab_carga_rapida:
-        st.subheader("Carga Rápida (Copiar y Pegar)")
-        st.info(f"""
-        Pega aquí los datos de Excel. Asegúrate de copiar las **{len(COLUMNAS_HC_TECNICOS)} columnas** en este orden: 
-        `{'`, `'.join(COLUMNAS_HC_TECNICOS)}`.
+        supervisor_sel_local = "Todos"
+        # El filtro solo aparece para roles que ven a más de una persona
+        if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
+            supervisor_sel_local = st.selectbox(
+                "Filtrar por Supervisor (solo en esta página):", 
+                supervisor_options_reabiertos,
+                key="filtro_supervisor_reabiertos"
+            )
         
-        **Importante:** La columna `tarjeta` es la **llave primaria (PRIMARY KEY)**. Si intentas
-        pegar una 'tarjeta' que ya existe, la operación **fallará**. Esta pestaña es solo para
-        **añadir nuevos** registros en bloque.
-        """)
+        # 5. Aplicar el filtro LOCAL
+        df_filtrada_final = df_coincidencias_ROL.copy()
+        if supervisor_sel_local != "Todos":
+            # Filtramos por la columna 'supervisor' (nombre) porque el selectbox usa nombres
+            if 'supervisor' in df_filtrada_final.columns:
+                df_filtrada_final = df_filtrada_final[
+                    df_filtrada_final['supervisor'].astype(str) == str(supervisor_sel_local)
+                ]
         
-        col_r1_hc, col_r2_hc, col_r3_hc = st.columns([2, 2, 1])
-        with col_r1_hc:
-            if st.button("📋 Pegar y Acumular Técnicos", type="primary", use_container_width=True, key="pegar_hc_tecnicos"):
-                texto = pyperclip.paste()
-                df_temp = procesar_pegado_simple(texto, COLUMNAS_HC_TECNICOS) 
-                
-                if not df_temp.empty:
-                    st.session_state.datos_hc_tecnicos_acumulado = pd.concat(
-                        [st.session_state.datos_hc_tecnicos_acumulado, df_temp],
-                        ignore_index=True
-                    ).drop_duplicates(subset=['tarjeta'], keep='last') # Evitar duplicados en el lote
-                    st.success(f"✅ Agregadas {len(df_temp)} filas. Total acumulado: {len(st.session_state.datos_hc_tecnicos_acumulado)}")
-
-        with col_r2_hc:
-            if st.button("⚡ Guardar Técnicos en BD", use_container_width=True, key="guardar_hc_tecnicos",
-                        disabled=st.session_state.datos_hc_tecnicos_acumulado.empty):
-                with st.spinner("Guardando técnicos en Supabase y CSV..."):
-                    df_para_guardar = st.session_state.datos_hc_tecnicos_acumulado.copy()
-                    
-                    guardados = guardar_datos_persistentes(
-                        df_para_guardar,
-                        'head_count_tecnico',
-                        ARCHIVO_HC_TECNICOS,
-                        'head_count_tecnicos',
-                        p_key='tarjeta'
-                    ) 
-                    
-                    if guardados > 0:
-                        st.success(f"✅ ¡Guardado! Se **añadieron {guardados}** registros a 'head_count_tecnico'.")
-                        st.session_state.datos_hc_tecnicos_acumulado = pd.DataFrame()
-                        st.rerun()
-                    else:
-                        st.error("❌ No se pudo guardar los datos. Revisa la consola de errores.")
-
-        with col_r3_hc:
-            if st.button("🗑️ Limpiar Acum. Técnicos", use_container_width=True, key="limpiar_hc_tecnicos",
-                        disabled=st.session_state.datos_hc_tecnicos_acumulado.empty):
-                st.session_state.datos_hc_tecnicos_acumulado = pd.DataFrame()
-                st.rerun()
-        
-        if not st.session_state.datos_hc_tecnicos_acumulado.empty:
-            st.markdown("---")
-            st.metric("Filas Acumuladas para Guardar", len(st.session_state.datos_hc_tecnicos_acumulado))
-            st.dataframe(st.session_state.datos_hc_tecnicos_acumulado, use_container_width=True, height=300)
-
-    # --- Sub-pestaña 2: Gestión Manual (CRUD) ---
-    with tab_crud:
-        st.subheader("Gestión Manual (Añadir, Actualizar, Eliminar)")
-        
-        # --- 1. AÑADIR (INSERT) ---
-        with st.expander("➕ Añadir Nuevo Técnico"):
-            with st.form("form_add_tecnico", clear_on_submit=True):
-                st.info("La 'Tarjeta' debe ser única.")
-                c1, c2 = st.columns(2)
-                with c1:
-                    ficha_new = st.text_input("Ficha")
-                    tarjeta_new = st.text_input("Tarjeta (Llave Primaria)")
-                    nombre_new = st.text_input("Nombre")
-                with c2:
-                    telefono_new = st.text_input("Teléfono")
-                    funcion_new = st.text_input("Función")
-                    supervisor_new = st.text_input("Supervisor")
-                
-                submitted_add = st.form_submit_button("Añadir Técnico", use_container_width=True)
-                if submitted_add:
-                    if not tarjeta_new:
-                        st.error("La 'Tarjeta' es obligatoria para añadir un registro.")
-                    else:
-                        query = """
-                        INSERT INTO head_count_tecnico (ficha, tarjeta, nombre, telefono, funcion, supervisor)
-                        VALUES (:ficha, :tarjeta, :nombre, :telefono, :funcion, :supervisor)
-                        ON CONFLICT (tarjeta) DO NOTHING;
-                        """
-                        params = {
-                            "ficha": ficha_new, "tarjeta": tarjeta_new, "nombre": nombre_new,
-                            "telefono": telefono_new, "funcion": funcion_new, "supervisor": supervisor_new
-                        }
-                        if ejecutar_crud_sql(query, params, f"✅ Técnico '{nombre_new}' ({tarjeta_new}) añadido con éxito."):
-                            recargar_datos_persistentes('head_count_tecnico', 'head_count_tecnicos')
-                            st.rerun()
-
-        # --- 2. ACTUALIZAR (UPDATE) ---
-        with st.expander("✏️ Actualizar Técnico Existente"):
-            if not df_actual_tecnicos.empty:
-                tarjeta_to_edit = st.selectbox(
-                    "Selecciona Técnico por Tarjeta:",
-                    options=df_actual_tecnicos['tarjeta'],
-                    index=None,
-                    placeholder="Escribe o selecciona una tarjeta..."
-                )
-                
-                if tarjeta_to_edit:
-                    registro_actual = df_actual_tecnicos[df_actual_tecnicos['tarjeta'] == tarjeta_to_edit].iloc[0]
-                    with st.form("form_edit_tecnico"):
-                        st.info(f"Editando registro de: **{registro_actual['nombre']}** (`{registro_actual['tarjeta']}`)")
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            ficha_edit = st.text_input("Ficha", value=registro_actual['ficha'])
-                            nombre_edit = st.text_input("Nombre", value=registro_actual['nombre'])
-                            funcion_edit = st.text_input("Función", value=registro_actual['funcion'])
-                        with c2:
-                            telefono_edit = st.text_input("Teléfono", value=registro_actual['telefono'])
-                            supervisor_edit = st.text_input("Supervisor", value=registro_actual['supervisor'])
-                        
-                        submitted_edit = st.form_submit_button("Actualizar Técnico", use_container_width=True)
-                        if submitted_edit:
-                            query = """
-                            UPDATE head_count_tecnico
-                            SET ficha = :ficha, nombre = :nombre, telefono = :telefono, funcion = :funcion, supervisor = :supervisor
-                            WHERE tarjeta = :tarjeta;
-                            """
-                            params = {
-                                "ficha": ficha_edit, "nombre": nombre_edit, "telefono": telefono_edit,
-                                "funcion": funcion_edit, "supervisor": supervisor_edit, "tarjeta": tarjeta_to_edit
-                            }
-                            if ejecutar_crud_sql(query, params, f"✅ Técnico '{nombre_edit}' ({tarjeta_to_edit}) actualizado."):
-                                recargar_datos_persistentes('head_count_tecnico', 'head_count_tecnicos')
-                                st.rerun()
-            else:
-                st.info("No hay técnicos para actualizar.")
-
-        # --- 3. ELIMINAR (DELETE) ---
-        with st.expander("🗑️ Eliminar Técnico"):
-            if not df_actual_tecnicos.empty:
-                tarjeta_to_delete = st.selectbox(
-                    "Selecciona Técnico por Tarjeta para ELIMINAR:",
-                    options=df_actual_tecnicos['tarjeta'],
-                    index=None,
-                    placeholder="Escribe o selecciona una tarjeta...",
-                    key="delete_tecnico_select"
-                )
-                
-                if tarjeta_to_delete:
-                    registro_a_borrar = df_actual_tecnicos[df_actual_tecnicos['tarjeta'] == tarjeta_to_delete].iloc[0]
-                    st.warning(f"**PRECAUCIÓN:** Estás a punto de eliminar a **{registro_a_borrar['nombre']}** (`{registro_a_borrar['tarjeta']}`). Esta acción no se puede deshacer.")
-                    
-                    if st.button("Confirmar Eliminación", type="primary", use_container_width=True):
-                        query = "DELETE FROM head_count_tecnico WHERE tarjeta = :tarjeta;"
-                        params = {"tarjeta": tarjeta_to_delete}
-                        if ejecutar_crud_sql(query, params, f"🗑️ Técnico ({tarjeta_to_delete}) eliminado."):
-                            recargar_datos_persistentes('head_count_tecnico', 'head_count_tecnicos')
-                            st.rerun()
-            else:
-                st.info("No hay técnicos para eliminar.")
-
-        # --- 4. VER TABLA ---
         st.markdown("---")
-        st.subheader("Listado Actual de Técnicos")
-        filtro_hc_t = st.text_input("🔍 Buscar en Técnicos:", key="filtro_hc_tecnicos_crud")
-        df_hc_t_filtrado = df_actual_tecnicos
-        if filtro_hc_t:
-            try:
-                mask = df_actual_tecnicos.apply(lambda row: row.astype(str).str.contains(filtro_hc_t, case=False, regex=False).any(), axis=1)
-                df_hc_t_filtrado = df_actual_tecnicos[mask]
-            except Exception as e: st.warning(f"Error filtro: {e}")
         
-        st.dataframe(df_hc_t_filtrado, use_container_width=True, height=400)
-        excel_hc_t = convertir_a_excel_simple(df_hc_t_filtrado)
-        if excel_hc_t:
-            st.download_button("📥 Descargar Vista (Excel)", excel_hc_t, "head_count_tecnicos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='excel-hc-tecnicos', use_container_width=True)
-
-# ------------------------------------------------------------------------------
-# --- v2.9.0: PESTAÑA 8: HEAD COUNT SUPERVISORES ---
-# ------------------------------------------------------------------------------
-with tab_hc_supervisores:
-    st.header("🧑‍💼 Head Count - Supervisores")
-    
-    COLUMNAS_HC_SUPERVISORES = ['ficha', 'tarjeta', 'nombre', 'telefono', 'rol']
-    df_actual_supervisores = st.session_state.get('head_count_supervisores', pd.DataFrame())
-    
-    # Asegurar el orden de las columnas para mostrar
-    if not df_actual_supervisores.empty:
-        # Asegurarse de que todas las columnas esperadas existan
-        for col in COLUMNAS_HC_SUPERVISORES:
-            if col not in df_actual_supervisores.columns:
-                df_actual_supervisores[col] = ''
-        df_actual_supervisores = df_actual_supervisores[COLUMNAS_HC_SUPERVISORES]
-
-    tab_carga_rapida_s, tab_crud_s = st.tabs(["Carga Rápida (Pegar)", "Gestión Manual (CRUD)"])
-
-    # --- Sub-pestaña 1: Carga Rápida ---
-    with tab_carga_rapida_s:
-        st.subheader("Carga Rápida (Copiar y Pegar)")
-        st.info(f"""
-        Pega aquí los datos de Excel. Asegúrate de copiar las **{len(COLUMNAS_HC_SUPERVISORES)} columnas** en este orden: 
-        `{'`, `'.join(COLUMNAS_HC_SUPERVISORES)}`.
-        
-        **Importante:** La columna `tarjeta` es la **llave primaria (PRIMARY KEY)**. Si intentas
-        pegar una 'tarjeta' que ya existe, la operación **fallará**. Esta pestaña es solo para
-        **añadir nuevos** registros en bloque.
-        """)
-        
-        col_r1_hcs, col_r2_hcs, col_r3_hcs = st.columns([2, 2, 1])
-        with col_r1_hcs:
-            if st.button("📋 Pegar y Acumular Supervisores", type="primary", use_container_width=True, key="pegar_hc_supervisores"):
-                texto = pyperclip.paste()
-                df_temp = procesar_pegado_simple(texto, COLUMNAS_HC_SUPERVISORES) 
-                
-                if not df_temp.empty:
-                    st.session_state.datos_hc_supervisores_acumulado = pd.concat(
-                        [st.session_state.datos_hc_supervisores_acumulado, df_temp],
-                        ignore_index=True
-                    ).drop_duplicates(subset=['tarjeta'], keep='last')
-                    st.success(f"✅ Agregadas {len(df_temp)} filas. Total acumulado: {len(st.session_state.datos_hc_supervisores_acumulado)}")
-
-        with col_r2_hcs:
-            if st.button("⚡ Guardar Supervisores en BD", use_container_width=True, key="guardar_hc_supervisores",
-                        disabled=st.session_state.datos_hc_supervisores_acumulado.empty):
-                with st.spinner("Guardando supervisores en Supabase y CSV..."):
-                    df_para_guardar = st.session_state.datos_hc_supervisores_acumulado.copy()
-                    
-                    guardados = guardar_datos_persistentes(
-                        df_para_guardar,
-                        'head_count_supervisor',
-                        ARCHIVO_HC_SUPERVISORES,
-                        'head_count_supervisores',
-                        p_key='tarjeta'
-                    ) 
-                    
-                    if guardados > 0:
-                        st.success(f"✅ ¡Guardado! Se **añadieron {guardados}** registros a 'head_count_supervisor'.")
-                        st.session_state.datos_hc_supervisores_acumulado = pd.DataFrame()
-                        st.rerun()
-                    else:
-                        st.error("❌ No se pudo guardar los datos. Revisa la consola de errores.")
-
-        with col_r3_hcs:
-            if st.button("🗑️ Limpiar Acum. Supervisores", use_container_width=True, key="limpiar_hc_supervisores",
-                        disabled=st.session_state.datos_hc_supervisores_acumulado.empty):
-                st.session_state.datos_hc_supervisores_acumulado = pd.DataFrame()
-                st.rerun()
-        
-        if not st.session_state.datos_hc_supervisores_acumulado.empty:
-            st.markdown("---")
-            st.metric("Filas Acumuladas para Guardar", len(st.session_state.datos_hc_supervisores_acumulado))
-            st.dataframe(st.session_state.datos_hc_supervisores_acumulado, use_container_width=True, height=300)
-
-    # --- Sub-pestaña 2: Gestión Manual (CRUD) ---
-    with tab_crud_s:
-        st.subheader("Gestión Manual (Añadir, Actualizar, Eliminar)")
-        
-        # --- 1. AÑADIR (INSERT) ---
-        with st.expander("➕ Añadir Nuevo Supervisor"):
-            with st.form("form_add_supervisor", clear_on_submit=True):
-                st.info("La 'Tarjeta' debe ser única.")
-                c1, c2 = st.columns(2)
-                with c1:
-                    ficha_new_s = st.text_input("Ficha", key="s_ficha_new")
-                    tarjeta_new_s = st.text_input("Tarjeta (Llave Primaria)", key="s_tarjeta_new")
-                    nombre_new_s = st.text_input("Nombre", key="s_nombre_new")
-                with c2:
-                    telefono_new_s = st.text_input("Teléfono", key="s_telefono_new")
-                    rol_new_s = st.text_input("Rol", key="s_rol_new")
-                
-                submitted_add_s = st.form_submit_button("Añadir Supervisor", use_container_width=True)
-                if submitted_add_s:
-                    if not tarjeta_new_s:
-                        st.error("La 'Tarjeta' es obligatoria para añadir un registro.")
-                    else:
-                        query = """
-                        INSERT INTO head_count_supervisor (ficha, tarjeta, nombre, telefono, rol)
-                        VALUES (:ficha, :tarjeta, :nombre, :telefono, :rol)
-                        ON CONFLICT (tarjeta) DO NOTHING;
-                        """
-                        params = {
-                            "ficha": ficha_new_s, "tarjeta": tarjeta_new_s, "nombre": nombre_new_s,
-                            "telefono": telefono_new_s, "rol": rol_new_s
-                        }
-                        if ejecutar_crud_sql(query, params, f"✅ Supervisor '{nombre_new_s}' ({tarjeta_new_s}) añadido con éxito."):
-                            recargar_datos_persistentes('head_count_supervisor', 'head_count_supervisores')
-                            st.rerun()
-
-        # --- 2. ACTUALIZAR (UPDATE) ---
-        with st.expander("✏️ Actualizar Supervisor Existente"):
-            if not df_actual_supervisores.empty:
-                tarjeta_to_edit_s = st.selectbox(
-                    "Selecciona Supervisor por Tarjeta:",
-                    options=df_actual_supervisores['tarjeta'],
-                    index=None,
-                    placeholder="Escribe o selecciona una tarjeta...",
-                    key="edit_sup_select"
-                )
-                
-                if tarjeta_to_edit_s:
-                    registro_actual_s = df_actual_supervisores[df_actual_supervisores['tarjeta'] == tarjeta_to_edit_s].iloc[0]
-                    with st.form("form_edit_supervisor"):
-                        st.info(f"Editando registro de: **{registro_actual_s['nombre']}** (`{registro_actual_s['tarjeta']}`)")
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            ficha_edit_s = st.text_input("Ficha", value=registro_actual_s['ficha'], key="s_ficha_edit")
-                            nombre_edit_s = st.text_input("Nombre", value=registro_actual_s['nombre'], key="s_nombre_edit")
-                        with c2:
-                            telefono_edit_s = st.text_input("Teléfono", value=registro_actual_s['telefono'], key="s_telefono_edit")
-                            rol_edit_s = st.text_input("Rol", value=registro_actual_s['rol'], key="s_rol_edit")
-                        
-                        submitted_edit_s = st.form_submit_button("Actualizar Supervisor", use_container_width=True)
-                        if submitted_edit_s:
-                            query = """
-                            UPDATE head_count_supervisor
-                            SET ficha = :ficha, nombre = :nombre, telefono = :telefono, rol = :rol
-                            WHERE tarjeta = :tarjeta;
-                            """
-                            params = {
-                                "ficha": ficha_edit_s, "nombre": nombre_edit_s, "telefono": telefono_edit_s,
-                                "rol": rol_edit_s, "tarjeta": tarjeta_to_edit_s
-                            }
-                            if ejecutar_crud_sql(query, params, f"✅ Supervisor '{nombre_edit_s}' ({tarjeta_to_edit_s}) actualizado."):
-                                recargar_datos_persistentes('head_count_supervisor', 'head_count_supervisores')
-                                st.rerun()
+        # 6. Mostrar resultados
+        if df_filtrada_final.empty:
+            # Mensaje personalizado si es un supervisor
+            if st.session_state.user_role == "supervisor":
+                st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI (para el supervisor: {st.session_state.supervisor_id}).")
+            # Mensaje si el admin filtró y no encontró nada
+            elif supervisor_sel_local != "Todos":
+                st.info(f"🎉 No se encontraron reabiertos activos para el supervisor '{supervisor_sel_local}'.")
+            # Mensaje general
             else:
-                st.info("No hay supervisores para actualizar.")
-
-        # --- 3. ELIMINAR (DELETE) ---
-        with st.expander("🗑️ Eliminar Supervisor"):
-            if not df_actual_supervisores.empty:
-                tarjeta_to_delete_s = st.selectbox(
-                    "Selecciona Supervisor por Tarjeta para ELIMINAR:",
-                    options=df_actual_supervisores['tarjeta'],
-                    index=None,
-                    placeholder="Escribe o selecciona una tarjeta...",
-                    key="delete_supervisor_select"
-                )
-                
-                if tarjeta_to_delete_s:
-                    registro_a_borrar_s = df_actual_supervisores[df_actual_supervisores['tarjeta'] == tarjeta_to_delete_s].iloc[0]
-                    st.warning(f"**PRECAUCIÓN:** Estás a punto de eliminar a **{registro_a_borrar_s['nombre']}** (`{registro_a_borrar_s['tarjeta']}`). Esta acción no se puede deshacer.")
-                    
-                    if st.button("Confirmar Eliminación", type="primary", use_container_width=True, key="delete_sup_confirm"):
-                        query = "DELETE FROM head_count_supervisor WHERE tarjeta = :tarjeta;"
-                        params = {"tarjeta": tarjeta_to_delete_s}
-                        if ejecutar_crud_sql(query, params, f"🗑️ Supervisor ({tarjeta_to_delete_s}) eliminado."):
-                            recargar_datos_persistentes('head_count_supervisor', 'head_count_supervisores')
-                            st.rerun()
-            else:
-                st.info("No hay supervisores para eliminar.")
-
-        # --- 4. VER TABLA ---
-        st.markdown("---")
-        st.subheader("Listado Actual de Supervisores")
-        filtro_hc_s = st.text_input("🔍 Buscar en Supervisores:", key="filtro_hc_supervisores_crud")
-        df_hc_s_filtrado = df_actual_supervisores
-        if filtro_hc_s:
-            try:
-                mask = df_actual_supervisores.apply(lambda row: row.astype(str).str.contains(filtro_hc_s, case=False, regex=False).any(), axis=1)
-                df_hc_s_filtrado = df_actual_supervisores[mask]
-            except Exception as e: st.warning(f"Error filtro: {e}")
-        
-        st.dataframe(df_hc_s_filtrado, use_container_width=True, height=400)
-        excel_hc_s = convertir_a_excel_simple(df_hc_s_filtrado)
-        if excel_hc_s:
-            st.download_button("📥 Descargar Vista (Excel)", excel_hc_s, "head_count_supervisores.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='excel-hc-supervisores', use_container_width=True)
-
-# ------------------------------------------------------------------------------
-# --- PESTAÑA 9: HISTORIAL --- (Antes Pestaña 4, ahora 9)
-# ------------------------------------------------------------------------------
-with tab4:
-    st.header("📊 Visualización de Historiales")
-
-    subtab1, subtab2, subtab_reab = st.tabs([
-        "📸 Snapshot de Hoy",
-        "📚 Historial de Cambios",
-        "🔄 Reabiertos (Historial)" 
-    ])
-
-    with subtab1:
-        st.subheader("📸 Snapshot de Hoy")
-        st.info("Muestra el estado actual de las órdenes 'Activo'/'Iniciado' del último Snapshot finalizado.")
-        snapshot_hoy = st.session_state.snapshot_hoy 
-        if not snapshot_hoy.empty:
-            st.metric("Órdenes en Snapshot", len(snapshot_hoy))
-            filtro_snap_hoy = st.text_input("🔍 Buscar en Snapshot:", key="filtro_snap_hoy_view")
-            df_snap_hoy_filtrado = snapshot_hoy
-            if filtro_snap_hoy:
-                try:
-                    mask = snapshot_hoy.apply(lambda row: row.astype(str).str.contains(filtro_snap_hoy, case=False, regex=False).any(), axis=1)
-                    df_snap_hoy_filtrado = snapshot_hoy[mask]
-                except Exception as e: st.warning(f"Error filtro: {e}")
-            
-            st.dataframe(df_snap_hoy_filtrado, use_container_width=True, height=500) 
-            col_d1_s, col_d2_s = st.columns(2)
-            with col_d1_s:
-                csv_snap_hoy = df_snap_hoy_filtrado.to_csv(index=False, sep=';').encode('utf-8')
-                st.download_button("📥 Descargar CSV", csv_snap_hoy, f"snapshot_hoy_vista.csv", mime='text/csv', key='csv-snapshot', use_container_width=True)
-            with col_d2_s:
-                excel_snap_hoy = convertir_a_excel(df_snap_hoy_filtrado, es_snapshot=True) 
-                if excel_snap_hoy: st.download_button("📥 Descargar Excel", excel_snap_hoy, f"snapshot_hoy_vista.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='excel-snapshot', use_container_width=True)
-        else: st.info("📌 Snapshot vacío.")
-
-    with subtab2:
-        st.subheader("📚 Historial de Cambios")
-        st.info("Muestra todos los registros de cambios (NUEVO y CAMBIO). Los tickets 'ACTIVO' sin cambios no se guardan aquí.")
-        historial_completo = st.session_state.historial_cambios 
-        
-        if not historial_completo.empty:
-            st.metric("Total Registros Históricos", len(historial_completo))
-            tickets_unicos_hist = 0; dias_historial_str = "N/A" 
-            if 'OrdenExterna' in historial_completo.columns: tickets_unicos_hist = historial_completo['OrdenExterna'].nunique()
-            if 'Timestamp_Procesado' in historial_completo.columns:
-                try:
-                    timestamps_validos = pd.to_datetime(historial_completo['Timestamp_Procesado'], errors='coerce').dropna()
-                    if not timestamps_validos.empty:
-                        dias_historial = (timestamps_validos.max().date() - timestamps_validos.min().date()).days + 1; dias_historial_str = str(dias_historial)
-                except Exception: pass
-            col_stat1_hc, col_stat2_hc = st.columns(2);
-            with col_stat1_hc: st.metric("🎫 Tickets Únicos", tickets_unicos_hist)
-            with col_stat2_hc: st.metric("📅 Días de Historial", dias_historial_str)
-
-            col_f1, col_f2, col_f3 = st.columns(3)
-            df_hist_completo_filtrado = historial_completo
-            lotes_hist = []; tipos_evento_unicos_hist = []; estados_unicos_hist = [] 
-            if 'Lote_Procesado' in df_hist_completo_filtrado.columns: lotes_hist = sorted(pd.to_numeric(df_hist_completo_filtrado['Lote_Procesado'], errors='coerce').dropna().astype(int).unique(), reverse=True)
-            if 'Tipo_Evento' in df_hist_completo_filtrado.columns: tipos_evento_unicos_hist = sorted(df_hist_completo_filtrado['Tipo_Evento'].dropna().unique())
-            if 'Estado' in df_hist_completo_filtrado.columns: estados_unicos_hist = sorted(df_hist_completo_filtrado['Estado'].dropna().unique())
-
-            with col_f1:
-                if lotes_hist:
-                    lote_seleccionado_hist = st.selectbox("🔢 Lote:", options=["Todos"] + lotes_hist, key="filtro_lote_hist")
-                    if lote_seleccionado_hist != "Todos": df_hist_completo_filtrado = df_hist_completo_filtrado[pd.to_numeric(df_hist_completo_filtrado['Lote_Procesado'], errors='coerce') == lote_seleccionado_hist]
-            with col_f2:
-                if tipos_evento_unicos_hist:
-                    default_eventos = [e for e in tipos_evento_unicos_hist if e != 'ACTIVO']
-                    if not default_eventos: default_eventos = tipos_evento_unicos_hist
-                    
-                    tipo_evento_filtro_hist = st.multiselect("🏷️ Evento:", options=tipos_evento_unicos_hist, default=default_eventos, key="filtro_evento_hist")
-                    if set(tipo_evento_filtro_hist) != set(tipos_evento_unicos_hist): df_hist_completo_filtrado = df_hist_completo_filtrado[df_hist_completo_filtrado['Tipo_Evento'].isin(tipo_evento_filtro_hist)]
-            with col_f3:
-                if estados_unicos_hist:
-                    estado_filtro_hist = st.multiselect("🚦 Estado:", options=estados_unicos_hist, default=estados_unicos_hist, key="filtro_estado_hist")
-                    if set(estado_filtro_hist) != set(estados_unicos_hist): df_hist_completo_filtrado = df_hist_completo_filtrado[df_hist_completo_filtrado['Estado'].isin(estado_filtro_hist)]
-            
-            filtro_hist_completo_texto = st.text_input("🔍 Buscar en Historial Filtrado:", key="filtro_hist_completo_view")
-            if filtro_hist_completo_texto:
-                try:
-                    mask = df_hist_completo_filtrado.apply(lambda row: row.astype(str).str.contains(filtro_hist_completo_texto, case=False, regex=False).any(), axis=1)
-                    df_hist_completo_filtrado = df_hist_completo_filtrado[mask]
-                except Exception as e: st.warning(f"Error filtro texto: {e}")
-            
-            df_hist_completo_filtrado_sorted = normalizar_timestamps(df_hist_completo_filtrado).sort_values(['Lote_Procesado', 'Timestamp_Procesado'], ascending=[False, False])
-            st.dataframe(df_hist_completo_filtrado_sorted, use_container_width=True, height=500) 
-            
-            col_d1_hc, col_d2_hc = st.columns(2)
-            with col_d1_hc:
-                csv_hist_completo = df_hist_completo_filtrado_sorted.to_csv(index=False, sep=';').encode('utf-8') 
-                st.download_button("📥 Descargar CSV", csv_hist_completo, f"historial_completo_vista.csv", mime='text/csv', key='csv-hist-completo', use_container_width=True)
-            with col_d2_hc:
-                excel_hist_completo = convertir_a_excel(df_hist_completo_filtrado_sorted) 
-                if excel_hist_completo: st.download_button("📥 Descargar Excel", excel_hist_completo, f"historial_completo_vista.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='excel-hist-completo', use_container_width=True)
-        else: st.info("📌 El historial de cambios está vacío.")
-
-    with subtab_reab:
-        st.subheader("🔄 Historial de Reabiertos")
-        st.info("Muestra todos los registros de reabiertos cargados históricamente (no solo hoy).")
-        
-        df_reabiertos = st.session_state.get('reabiertos', pd.DataFrame())
-        
-        if not df_reabiertos.empty:
-            st.metric("Total Registros Reabiertos (Histórico)", len(df_reabiertos))
-            
-            filtro_reab_texto = st.text_input("🔍 Buscar en Reabiertos:", key="filtro_reab_view")
-            df_reab_filtrado = df_reabiertos
-            if filtro_reab_texto:
-                try:
-                    mask = df_reab_filtrado.apply(lambda row: row.astype(str).str.contains(filtro_reab_texto, case=False, regex=False).any(), axis=1)
-                    df_reab_filtrado = df_reab_filtrado[mask]
-                except Exception as e: st.warning(f"Error filtro texto: {e}")
-            
-            cols_display_reab = ['caso', 'codigo', 'tarjeta', 'supervisor', 'tarjeta_supervisor', 'fecha', 'condicion']
-            cols_existentes = [col for col in cols_display_reab if col in df_reab_filtrado.columns]
-            df_reab_filtrado_display = df_reab_filtrado[cols_existentes]
-
-            st.dataframe(df_reab_filtrado_display, use_container_width=True, height=500)
-            
-            col_d1_r, col_d2_r = st.columns(2)
-            with col_d1_r:
-                csv_reab = df_reab_filtrado_display.to_csv(index=False, sep=';').encode('utf-8')
-                st.download_button("📥 Descargar CSV (Reabiertos)", csv_reab, f"reabiertos_vista.csv", mime='text/csv', key='csv-reabiertos', use_container_width=True)
-            with col_d2_r:
-                excel_reab = convertir_a_excel_simple(df_reab_filtrado_display)
-                if excel_reab: 
-                    st.download_button("📥 Descargar Excel (Reabiertos)", excel_reab, f"reabiertos_vista.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='excel-reabiertos', use_container_width=True)
+                st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI.")
         else:
-            st.info("📌 El historial de reabiertos está vacío.")
+            st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_final))
+            
+            # Formatear para mostrar
+            df_display = formatear_para_display(df_filtrada_final)
+            
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            
+            # Botón de descarga
+            excel_data = to_excel(df_filtrada_final)
+            if excel_data:
+                st.download_button(
+                    label="📥 Descargar Coincidencias (Excel)",
+                    data=excel_data,
+                    file_name=f"reabiertos_activos_{supervisor_sel_local}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
 
-st.markdown("---")
-st.caption("Sistema KUNAI v2.9.0 - CRUD Head Count Integrado")
+# --- FIN DE LA PÁGINA DE REABIERTOS ---
+
+
+# --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
+elif menu == "⚙️ Admin Usuarios":
+    render_admin_crud_page()
+
+
