@@ -1447,7 +1447,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Desglose por Supervisor")
         
-        # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+        # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
         resumen_admin = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
         
         if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
@@ -1514,7 +1514,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         )
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                                xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                                                   xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
                         st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
                     else:
                         st.info("No hay PYMEs vencidas para mostrar.")
@@ -1545,7 +1545,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👥 Resumen por Supervisor")
         
-        # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+        # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
         resumen_sup = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
         
         st.dataframe(
@@ -1556,7 +1556,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
-            # --- ¡MODIFICADO! Añadido 'df_head_count' ---
+            # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
             resumen_tec = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
             
             if not resumen_tec.empty:
@@ -1584,8 +1584,8 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             st.subheader(f"👥 {titulo_resumen}")
             if agrupar_por in df_page_data.columns:
                 
-                # --- ¡MODIFICADO! Añadido 'df_head_count' ---
-                resumen = crear_resumen_admin(df_page_data, df_head_count, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+                # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
+                resumen = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
                 
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
@@ -1621,6 +1621,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.markdown("---")
         st.subheader("📋 Detalle de Tickets")
         display_detail_table(df_page_data, df_full_historial, role, role_supervisor_id, global_supervisor_sel, status_filter, page_key, page_key, reabiertos_set)
+# --- End of Render Dashboard Function ---
 # --- End of Render Dashboard Function ---
 # ***** FIN CAMBIO v2.7.5 *****
 # --- End of Render Dashboard Function ---
@@ -1959,6 +1960,11 @@ if not df_unicos.empty and asignado_sel: # Si se seleccionó algo en el filtro A
 # --------------------------
 # --- ¡CONTENIDO DE PÁGINAS MODIFICADO! ---
 # --------------------------
+# (Reemplaza desde la línea 1941 hasta el final)
+
+# --------------------------
+# --- ¡CONTENIDO DE PÁGINAS MODIFICADO! ---
+# --------------------------
 
 if menu == "🏠 Principal":
     st.title(f"🏠 Dashboard Principal - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
@@ -1969,9 +1975,8 @@ if menu == "🏠 Principal":
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="principal",
             reabiertos_set=set_casos_reabiertos,
-            df_hc_supervisores=df_hc_supervisores,
-            df_hc_tecnicos=df_hc_tecnicos,
-              # <-- PASANDO REABIERTOS
+            df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
             critical_metric_key='Pendientes' 
         )
     else: 
@@ -1984,7 +1989,7 @@ if menu == "🏠 Principal":
         st.subheader(f"👥 {titulo_resumen}")
         if agrupar_por in df_unicos.columns:
             
-            # --- ¡CORRECCIÓN AQUÍ! FALTABA df_head_count ---
+            # --- ¡CORRECCIÓN AQUÍ! Se pasan ambas tablas HC ---
             resumen = crear_resumen_admin(df_unicos, df_hc_supervisores, df_hc_tecnicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=False)
             
             if not resumen.empty:
@@ -2033,9 +2038,9 @@ elif menu == "📊 Análisis PYMEs":
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes",
         reabiertos_set=set_casos_reabiertos,
-        df_hc_supervisores=df_hc_supervisores,
-        df_hc_tecnicos=df_hc_tecnicos, # <-- PASANDO REABIERTOS
-        critical_metric_key='Pymes_Vencidos' # <-- Nueva métrica crítica para PYMEs
+        df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+        df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+        critical_metric_key='Pymes_Vencidos' 
     )
 
 elif menu == "⏰ Puntualidad":
@@ -2065,10 +2070,7 @@ elif menu == "⏰ Puntualidad":
         df_puntuales_filtrado = df_puntuales.copy() # Fallback
 
     # 3. Calcular KPIs para ANULAR (override)
-    # Los KPIs de 'Total', 'Pendientes', 'Manejado', 'Eficiencia' se calculan con los datos FILTRADOS
     kpis_filtrados = calcular_kpis(df_puntuales_filtrado, df_full_historial)
-    
-    # Los KPIs de 'Citados' (y otros) se calculan con los datos COMPLETOS
     kpis_completos = calcular_kpis(df_puntuales, df_full_historial)
     
     # 4. Crear el diccionario de anulación
@@ -2077,27 +2079,24 @@ elif menu == "⏰ Puntualidad":
         'Pendientes': kpis_filtrados.get('Pendientes', 0),
         'Manejados': kpis_filtrados.get('Manejados', 0),
         'Eficiencia_Total_%': kpis_filtrados.get('Eficiencia_Total_%', 0.0),
-        # Tomar los citados del cálculo completo
         'Citados': kpis_completos.get('Citados', 0) 
     }
 
-    # 5. Llamar al renderizador con el dataframe COMPLETO (para la tabla)
-    #    y el diccionario de anulación (para los KPIs)
+    # 5. Llamar al renderizador
     render_dashboard_page(
         title_prefix="Puntualidad General", 
-        df_page_data=df_puntuales, # <-- ¡AQUÍ ESTÁ EL CAMBIO! (datos completos)
+        df_page_data=df_puntuales, # <-- Pasa datos completos
         df_full_historial=df_full_historial,
         role=st.session_state.user_role, 
         role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, 
         status_filter=estatus_sel, 
-        page_key="puntualidad", # La flag se activará con esto
+        page_key="puntualidad",
         reabiertos_set=set_casos_reabiertos,
-        df_hc_supervisores=df_hc_supervisores,
-        df_hc_tecnicos=df_hc_tecnicos,
-        kpi_override=kpi_override_dict # <-- Anula los KPIs
+        df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+        df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+        kpi_override=kpi_override_dict 
     )
-    # --- FIN DE LA NUEVA LÓGICA ---
 
 elif menu == "🎯 Citas Puntuales":
     st.title(f"🎯 Análisis de Citas Puntuales - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
@@ -2151,9 +2150,9 @@ elif menu == "🎯 Citas Puntuales":
         title_prefix="Citas Puntuales", df_page_data=df_citas, df_full_historial=df_full_historial,
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="citas",
-        df_hc_supervisores=df_hc_supervisores,
-        df_hc_tecnicos=df_hc_tecnicos,
-        reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+        df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+        df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+        reabiertos_set=set_casos_reabiertos
     )
 
 elif menu == "🔍 Tracking Ticket":
@@ -2353,9 +2352,9 @@ elif menu == "📅 Antiguas":
             title_prefix="Antigüedad 3 Días", df_page_data=df_3_dias, df_full_historial=df_full_historial,
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="antiguas_3_dias",
-            df_hc_supervisores=df_hc_supervisores,
-            df_hc_tecnicos=df_hc_tecnicos,
-            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+            df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            reabiertos_set=set_casos_reabiertos
         )
     with tab2:
         fecha_limite = hoy - timedelta(days=3)
@@ -2368,9 +2367,9 @@ elif menu == "📅 Antiguas":
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="antiguas_extrema", critical_metric_key='Total',
-            df_hc_supervisores=df_hc_supervisores,
-            df_hc_tecnicos=df_hc_tecnicos,
-            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+            df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            reabiertos_set=set_casos_reabiertos
         )
 
 elif menu == "📈 Rendimiento":
@@ -2412,9 +2411,9 @@ elif menu == "📈 Rendimiento":
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin,
-            df_hc_supervisores=df_hc_supervisores,
-            df_hc_tecnicos=df_hc_tecnicos,
-            reabiertos_set=set_casos_reabiertos # <-- PASANDO REABIERTOS
+            df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
+            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            reabiertos_set=set_casos_reabiertos
         )
 
 # --- ¡NUEVO! PÁGINA DE REABIERTOS v2.7.4 (CON FILTRO INDEPENDIENTE Y CORRECCIÓN DE ROL) ---
@@ -2495,7 +2494,7 @@ elif menu == "🔄 Reabiertos":
                 st.info(f"🎉 No se encontraron reabiertos activos para el supervisor '{supervisor_sel_local}'.")
             # Mensaje general
             else:
-                st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabiertos' que sigan 'activos' o 'iniciados' en KUNAI.")
+                st.info(f"🎉 ¡Buenas noticias! No se encontraron casos de 'reabierto' que sigan 'activos' o 'iniciados' en KUNAI.")
         else:
             st.metric("Casos Reabiertos (Aún Activos/Iniciados en KUNAI)", len(df_filtrada_final))
             
@@ -2520,5 +2519,3 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
-
