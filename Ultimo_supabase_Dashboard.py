@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, time, timedelta
-from streamlit_autorefresh import st_autorefresh
+# import streamlit_autorefresh # Ya no se usa
 import numpy as np
 from io import BytesIO
 import os # Importado para la conexión
@@ -511,12 +511,13 @@ def denormalizar_columnas_desde_sql(df_sql):
     columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
     return df_csv[columnas_esperadas_presentes]
 
+# --- ¡CAMBIO 1: Modificar la función cargar_datos para que devuelva la hora! ---
 @st.cache_data
 def cargar_datos():
     engine = get_database_engine()
     if engine is None:
         st.error("No hay conexión a la base de datos.")
-        return pd.DataFrame()
+        return pd.DataFrame(), None # <-- Retorna tupla
     try:
         query = text(""" SELECT 
                 trabajo, orden_externa, cliente, vence, oe_creacion, 
@@ -532,20 +533,21 @@ def cargar_datos():
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
 
-        # --- ¡CAMBIO 1! Guardar la hora de la actualización ---
-        st.session_state.last_update_time = get_current_ast_time().strftime('%d/%m/%Y %I:%M:%S %p')
-        # --- FIN DEL CAMBIO ---
+        # --- Se obtiene la hora de la actualización ---
+        last_update_time_obj = get_current_ast_time()
+        # --- Fin del cambio ---
 
         if df_sql.empty:
             st.warning("La tabla 'historial_cambios' está vacía.")
-            return pd.DataFrame()
+            return pd.DataFrame(), last_update_time_obj # <-- Retorna tupla
         df = denormalizar_columnas_desde_sql(df_sql)
         if df.empty:
             st.error("Error al mapear columnas de Supabase.")
-            return pd.DataFrame()
+            return pd.DataFrame(), last_update_time_obj # <-- Retorna tupla
     except Exception as e:
         st.error(f"❌ Error al cargar datos desde Supabase: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None # <-- Retorna tupla
+    
     df.columns = df.columns.str.strip()
     columnas_texto_clave = ['Supervisor', 'Estado', 'Tipo_Cliente', 'Tipo_servicio', 'Asignado_A', 'Prioridad']
     for col in df.columns.intersection(columnas_texto_clave):
@@ -582,7 +584,8 @@ def cargar_datos():
         df['Vencido'] = False
     else:
         df['Vencido'] = df['Vencido'].fillna(False).astype(bool)
-    return df
+    
+    return df, last_update_time_obj # <-- Retorna tupla
 # --- FIN DE LA LÓGICA DE CARGA ---
 
 
@@ -715,7 +718,11 @@ def cargar_head_count_tecnico():
 # ==============================================================================
 # --- LÓGICA PRINCIPAL (v2.7.1) ---
 # ==============================================================================
-df_full_historial = cargar_datos()
+
+# --- ¡CAMBIO 2! Capturar ambos valores de la función ---
+df_full_historial, last_update_time = cargar_datos()
+# --- FIN DEL CAMBIO ---
+
 df_reabiertos_full = cargar_datos_reabiertos()
 df_hc_supervisores = cargar_head_count_supervisor() # <-- Renombrado (antes df_head_count)
 df_hc_tecnicos = cargar_head_count_tecnico() # <-- NUEVA LÍNEA v2.7.3
@@ -1890,7 +1897,7 @@ menu = st.sidebar.radio("Selecciona una página", menu_options_base)
 
 st.sidebar.markdown("---")
 
-# --- ¡CAMBIO 2! Botón movido arriba de "Filtros" y sin separador ---
+# --- ¡CAMBIO 3! Botón movido arriba de "Filtros" y sin separador ---
 if st.session_state.user_role == "supervisor_old":
     if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
         # Limpia la caché de TODAS las funciones @st.cache_data
@@ -1981,9 +1988,9 @@ if menu == "🏠 Principal":
     st.title(f"🏠 Dashboard Principal - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Mostrando tickets cuyo **primer registro** fue hoy.") 
     
-    # --- ¡CAMBIO 2! Mostrar la hora de la última actualización ---
-    if 'last_update_time' in st.session_state:
-        st.caption(f"Última actualización de datos: **{st.session_state.last_update_time}** (AST)")
+    # --- ¡CAMBIO 3! Mostrar la hora de la última actualización ---
+    if last_update_time: # Comprueba si la variable no es None
+        st.caption(f"Última actualización de datos: **{last_update_time.strftime('%d/%m/%Y %I:%M:%S %p')}** (AST)")
     # --- FIN DEL CAMBIO ---
 
     if st.session_state.user_role in ["admin", "gerencia"]:
@@ -2362,7 +2369,7 @@ elif menu == "📅 Antiguas":
     with tab1:
         fecha_objetivo = hoy - timedelta(days=3)
         df_3_dias = pd.DataFrame()
-        if not df_unicos_antiguedad.empty:
+        if not df_unicos_antigmad.empty:
             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
                 df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
         render_dashboard_page(
