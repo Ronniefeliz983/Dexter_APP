@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, time, timedelta
-# import streamlit_autorefresh # Ya no se usa
+from streamlit_autorefresh import st_autorefresh # <-- 1. VUELVE A IMPORTARSE
 import numpy as np
 from io import BytesIO
 import os # Importado para la conexión
@@ -67,6 +67,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 # --- FIN DEL CÓDIGO CSS ---
+
+# --- ¡CAMBIO 2! VUELVE A AÑADIRSE EL AUTOREFRESH ---
+# Se ejecuta cada 1 minuto (60 * 1000 ms).
+# Esto forzará la ejecución de get_last_update_timestamp()
+st_autorefresh(interval=60 * 1000, key="data_refresh")
 
 
 # ==============================================================================
@@ -511,9 +516,8 @@ def denormalizar_columnas_desde_sql(df_sql):
     columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
     return df_csv[columnas_esperadas_presentes]
 
-# --- ¡CAMBIO 1: Modificar la función cargar_datos para que devuelva la hora! ---
-
-@st.cache_data(ttl=10)  # Se ejecuta cada 60 segundos, pero solo pesa ~1 KB
+# --- ¡CAMBIO 3: AÑADIR NUEVA FUNCIÓN DE CHEQUEO! ---
+@st.cache_data(ttl=10)  # <-- Caché MUY corta (10 segundos), pero súper barata (1 KB)
 def get_last_update_timestamp():
     """
     Obtiene el timestamp del cambio más reciente en 'historial_cambios'.
@@ -532,10 +536,13 @@ def get_last_update_timestamp():
     except Exception as e:
         st.error(f"Error al obtener timestamp: {e}")
         return None
-    
+# --- FIN CAMBIO 3 ---
 
-@st.cache_data  # Sin TTL, usa el timestamp para invalidar
-def cargar_datos(_last_update_ts=None):  # Parámetro con guion bajo
+
+# --- ¡CAMBIO 4: MODIFICAR cargar_datos() y cargar_datos_reabiertos()! ---
+
+@st.cache_data # <-- SIN TTL! Se cachea para siempre hasta que el trigger cambie
+def cargar_datos(_last_update_ts=None): # <-- Acepta el trigger
     """Carga el historial completo desde Supabase."""
     engine = get_database_engine()
     if engine is None:
@@ -613,8 +620,8 @@ def cargar_datos(_last_update_ts=None):  # Parámetro con guion bajo
 
 
 # --- NUEVA FUNCIÓN DE CARGA v2.7.4 (CORREGIDA) ---
-@st.cache_data
-def cargar_datos_reabiertos():
+@st.cache_data # <-- SIN TTL! Se cachea para siempre hasta que el trigger cambie
+def cargar_datos_reabiertos(_last_update_ts=None): # <-- Acepta el trigger
     """Carga la tabla 'reabiertos' de Supabase."""
     engine = get_database_engine()
     if engine is None:
@@ -655,6 +662,7 @@ def cargar_datos_reabiertos():
         st.error(f"❌ Error al cargar datos desde 'reabiertos': {e}")
         return pd.DataFrame()
 # --- FIN DE LA NUEVA FUNCIÓN ---
+# --- FIN DEL CAMBIO 4 ---
 
 # --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE SUPERVISOR ---
 @st.cache_data(ttl=3600) # Cache de 1 hora, los nombres no cambian mucho
@@ -700,7 +708,7 @@ def cargar_head_count_supervisor():
 # (Esto va DESPUÉS de la función cargar_head_count_supervisor)
 
 # --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE TÉCNICOS ---
-@st.cache_data# Cache de 1 hora
+@st.cache_data(ttl=3600)# Cache de 1 hora
 def cargar_head_count_tecnico():
     """Carga la tabla 'head_count_tecnico' de Supabase."""
     engine = get_database_engine()
@@ -742,12 +750,16 @@ def cargar_head_count_tecnico():
 # --- LÓGICA PRINCIPAL (v2.7.1) ---
 # ==============================================================================
 
-# --- ¡CAMBIO 2! Capturar ambos valores de la función ---
+# --- ¡CAMBIO 5! USAR EL "TRUCO DEL TIMESTAMP" ---
+# 1. Obtenemos el "trigger" (esto usa el caché de 10 seg)
 last_db_update = get_last_update_timestamp()
-df_full_historial, last_update_time = cargar_datos(_last_update_ts=last_db_update)
-# --- FIN DEL CAMBIO ---
 
-df_reabiertos_full = cargar_datos_reabiertos()
+# 2. Pasamos el trigger a las funciones de carga.
+df_full_historial, last_update_time = cargar_datos(_last_update_ts=last_db_update)
+df_reabiertos_full = cargar_datos_reabiertos(_last_update_ts=last_db_update)
+# --- FIN DEL CAMBIO 5 ---
+
+
 df_hc_supervisores = cargar_head_count_supervisor() # <-- Renombrado (antes df_head_count)
 df_hc_tecnicos = cargar_head_count_tecnico() # <-- NUEVA LÍNEA v2.7.3
 
@@ -1096,7 +1108,7 @@ def filtrar_dataframe_con_historial(df_completo_historial, df_unicos_para_buscar
     if 'OrdenExterna' not in df_completo_historial.columns:
         st.error("Error crítico: df_completo_historial no tiene 'OrdenExterna'.")
         return pd.DataFrame(columns=df_completo_historial.columns)
-    df_historial = df_completo_historial[df_completo_historial['OrdenExterna'].isin(tickets_encontrados)].copy()
+    df_historial = df_completo_historial[df_full_historial['OrdenExterna'].isin(tickets_encontrados)].copy()
     if supervisor_filter and 'Supervisor' in df_historial.columns:
         df_historial = df_historial[df_historial['Supervisor'].astype(str) == str(supervisor_filter)]
     ts_col_valid_hist = ('Timestamp_Procesado' in df_historial.columns and
@@ -2393,7 +2405,7 @@ elif menu == "📅 Antiguas":
     with tab1:
         fecha_objetivo = hoy - timedelta(days=3)
         df_3_dias = pd.DataFrame()
-        if not df_unicos_antiguedad.empty:
+        if not df_unicos_antiguedad.empty: # <-- ¡AQUÍ ESTABA EL ERROR!
             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
                 df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
         render_dashboard_page(
@@ -2567,4 +2579,3 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
