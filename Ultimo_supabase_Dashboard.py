@@ -245,7 +245,6 @@ if not verificar_login():
 # --------------------------
 # Auto-refresh
 # --------------------------
-st_autorefresh(interval=30 * 1000, key="data_refresh")
 
 
 # -----------------------------------------------
@@ -524,7 +523,17 @@ def cargar_datos():
         st.error("No hay conexión a la base de datos.")
         return pd.DataFrame()
     try:
-        query = text("SELECT * FROM historial_cambios") 
+        query = text(""" SELECT 
+                trabajo, orden_externa, cliente, vence, oe_creacion, 
+                oe_vence, oe_vencimiento, prioridad, tipo_de_prioridad, 
+                calendarizada, tanda_preferida, reclamacion, asignado_a, 
+                compania, supervisor, pool, estado, tecnologia, 
+                tipo_servicio, organizacion, sintoma, creado, 
+                tipo_cliente, segmento_cliente, ciudad, sector, 
+                barrio, cabina, terminal, cantidad_de_lineas, 
+                re_digitada, timestamp_procesado, fuente_paso, 
+                tipo_evento, lote_procesado
+            FROM historial_cambios """) 
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
         if df_sql.empty:
