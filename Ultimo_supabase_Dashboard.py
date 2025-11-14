@@ -595,7 +595,7 @@ def cargar_datos_reabiertos():
         st.error("No hay conexión a la base de datos.")
         return pd.DataFrame()
     try:
-        query = text("SELECT * FROM reabiertos")
+        query = text("SELECT caso, fecha, supervisor, tarjeta_supervisor FROM reabiertos")
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
         
@@ -639,7 +639,7 @@ def cargar_head_count_supervisor():
         st.error("No hay conexión a la base de datos.")
         return pd.DataFrame()
     try:
-        query = text("SELECT * FROM head_count_supervisor")
+        query = text("SELECT tarjeta, nombre FROM head_count_supervisor")
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
         
@@ -682,7 +682,7 @@ def cargar_head_count_tecnico():
         st.error("No hay conexión a la base de datos.")
         return pd.DataFrame()
     try:
-        query = text("SELECT * FROM head_count_tecnico")
+        query = text("SELECT tarjeta, nombre FROM head_count_tecnico")
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
         
