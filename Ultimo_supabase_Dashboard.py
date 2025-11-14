@@ -512,12 +512,35 @@ def denormalizar_columnas_desde_sql(df_sql):
     return df_csv[columnas_esperadas_presentes]
 
 # --- ¡CAMBIO 1: Modificar la función cargar_datos para que devuelva la hora! ---
-@st.cache_data
-def cargar_datos():
+
+@st.cache_data(ttl=60)  # Se ejecuta cada 60 segundos, pero solo pesa ~1 KB
+def get_last_update_timestamp():
+    """
+    Obtiene el timestamp del cambio más reciente en 'historial_cambios'.
+    Esto es MUY barato (1 KB) y permite invalidar la caché de forma inteligente.
+    """
     engine = get_database_engine()
     if engine is None:
-        st.error("No hay conexión a la base de datos.")
-        return pd.DataFrame(), None # <-- Retorna tupla
+        return None
+    try:
+        query = text("SELECT MAX(timestamp_procesado) as last_update FROM historial_cambios")
+        with engine.connect() as conn:
+            result = conn.execute(query).fetchone()
+            if result and result[0]:
+                return result[0]
+            return None
+    except Exception as e:
+        st.error(f"Error al obtener timestamp: {e}")
+        return None
+    
+
+@st.cache_data  # Sin TTL, usa el timestamp para invalidar
+def cargar_datos(_last_update_ts=None):  # Parámetro con guion bajo
+    """Carga el historial completo desde Supabase."""
+    engine = get_database_engine()
+    if engine is None:
+        st.error("No se pudo establecer conexión con la base de datos")
+        return pd.DataFrame(), None
     try:
         query = text(""" SELECT 
                 trabajo, orden_externa, cliente, vence, oe_creacion, 
@@ -634,7 +657,7 @@ def cargar_datos_reabiertos():
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
 # --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE SUPERVISOR ---
-@st.cache_data # Cache de 1 hora, los nombres no cambian mucho
+@st.cache_data(ttl=3600) # Cache de 1 hora, los nombres no cambian mucho
 def cargar_head_count_supervisor():
     """Carga la tabla 'head_count_supervisor' de Supabase."""
     engine = get_database_engine()
@@ -720,7 +743,8 @@ def cargar_head_count_tecnico():
 # ==============================================================================
 
 # --- ¡CAMBIO 2! Capturar ambos valores de la función ---
-df_full_historial, last_update_time = cargar_datos()
+last_db_update = get_last_update_timestamp()
+df_full_historial, last_update_time = cargar_datos(_last_update_ts=last_db_update)
 # --- FIN DEL CAMBIO ---
 
 df_reabiertos_full = cargar_datos_reabiertos()
