@@ -513,7 +513,7 @@ def denormalizar_columnas_desde_sql(df_sql):
 
 # --- ¡CAMBIO 1: Modificar la función cargar_datos para que devuelva la hora! ---
 
-@st.cache_data(ttl=60)  # Se ejecuta cada 60 segundos, pero solo pesa ~1 KB
+@st.cache_data(ttl=10)  # Se ejecuta cada 60 segundos, pero solo pesa ~1 KB
 def get_last_update_timestamp():
     """
     Obtiene el timestamp del cambio más reciente en 'historial_cambios'.
