@@ -531,6 +531,11 @@ def cargar_datos():
             FROM historial_cambios """) 
         with engine.connect() as conn:
             df_sql = pd.read_sql(query, conn)
+
+        # --- ¡CAMBIO 1! Guardar la hora de la actualización ---
+        st.session_state.last_update_time = get_current_ast_time().strftime('%d/%m/%Y %I:%M:%S %p')
+        # --- FIN DEL CAMBIO ---
+
         if df_sql.empty:
             st.warning("La tabla 'historial_cambios' está vacía.")
             return pd.DataFrame()
@@ -1885,7 +1890,7 @@ menu = st.sidebar.radio("Selecciona una página", menu_options_base)
 
 st.sidebar.markdown("---")
 
-# --- ¡CAMBIO AQUÍ! Botón movido arriba de "Filtros" ---
+# --- ¡CAMBIO 2! Botón movido arriba de "Filtros" y sin separador ---
 if st.session_state.user_role == "supervisor_old":
     if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
         # Limpia la caché de TODAS las funciones @st.cache_data
@@ -1914,6 +1919,7 @@ if st.session_state.user_role in ["admin", "gerencia", "supervisor_old"]:
 else:
     supervisor_sel = st.session_state.supervisor_id
 estatus_sel = st.sidebar.multiselect("Estado", options=estado_options, default=estado_options)
+
 
 # --- DataFrames Filtrados (Basados en 'df' - solo NUEVOS HOY) ---
 df_supervisor_unicos = df_unicos_base.copy() if df_unicos_base is not None else pd.DataFrame()
@@ -1974,6 +1980,12 @@ if not df_unicos.empty and asignado_sel: # Si se seleccionó algo en el filtro A
 if menu == "🏠 Principal":
     st.title(f"🏠 Dashboard Principal - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Mostrando tickets cuyo **primer registro** fue hoy.") 
+    
+    # --- ¡CAMBIO 2! Mostrar la hora de la última actualización ---
+    if 'last_update_time' in st.session_state:
+        st.caption(f"Última actualización de datos: **{st.session_state.last_update_time}** (AST)")
+    # --- FIN DEL CAMBIO ---
+
     if st.session_state.user_role in ["admin", "gerencia"]:
         render_dashboard_page(
             title_prefix="Principal", df_page_data=df_unicos, df_full_historial=df_full_historial,
