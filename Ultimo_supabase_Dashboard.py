@@ -2369,7 +2369,7 @@ elif menu == "📅 Antiguas":
     with tab1:
         fecha_objetivo = hoy - timedelta(days=3)
         df_3_dias = pd.DataFrame()
-        if not df_unicos_antigmad.empty:
+        if not df_unicos_antiguedad.empty:
             if pd.api.types.is_datetime64_any_dtype(df_unicos_antiguedad['OE_Creacion']):
                 df_3_dias = df_unicos_antiguedad[df_unicos_antiguedad['OE_Creacion'].dt.normalize() == fecha_objetivo]
         render_dashboard_page(
@@ -2543,3 +2543,4 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
