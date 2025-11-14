@@ -1906,7 +1906,7 @@ else:
 estatus_sel = st.sidebar.multiselect("Estado", options=estado_options, default=estado_options)
 
 # --- ¡NUEVO! Botón de Refresh Manual ---
-if st.session_state.user_role in ["admin", "supervisor_old"]:
+if st.session_state.user_role in ["supervisor_old"]:
     st.sidebar.markdown("---") # Separador visual
     if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
         # Limpia la caché de TODAS las funciones @st.cache_data
