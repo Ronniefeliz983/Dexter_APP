@@ -317,7 +317,7 @@ def calcular_vencido(row):
             return False
     # --- FIN DE LA LÓGICA CORREGIDA ---
 
-@st.cache_data(ttl=300)
+@st.cache_data
 def get_earliest_batch_initial_cohort(df_full_historial):
     if (df_full_historial is None or df_full_historial.empty or
         'OrdenExterna' not in df_full_historial.columns or
@@ -435,7 +435,7 @@ def calcular_kpis(df, df_full_historial):
 
 
 # --- NUEVA FUNCIÓN DE ANÁLISIS v2.7.3 ---
-@st.cache_data(ttl=60)
+@st.cache_data
 def analizar_reabiertos(_df_historial, _df_reabiertos):
     """
     Compara reabiertos['caso'] con historial['OrdenExterna'] que estén 'activo' o 'iniciado'.
@@ -511,7 +511,7 @@ def denormalizar_columnas_desde_sql(df_sql):
     columnas_esperadas_presentes = [v for v in mapeo_valido.values() if v in df_csv.columns]
     return df_csv[columnas_esperadas_presentes]
 
-@st.cache_data(ttl=60)
+@st.cache_data
 def cargar_datos():
     engine = get_database_engine()
     if engine is None:
@@ -582,7 +582,7 @@ def cargar_datos():
 
 
 # --- NUEVA FUNCIÓN DE CARGA v2.7.4 (CORREGIDA) ---
-@st.cache_data(ttl=60)
+@st.cache_data
 def cargar_datos_reabiertos():
     """Carga la tabla 'reabiertos' de Supabase."""
     engine = get_database_engine()
@@ -626,7 +626,7 @@ def cargar_datos_reabiertos():
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
 # --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE SUPERVISOR ---
-@st.cache_data(ttl=3600) # Cache de 1 hora, los nombres no cambian mucho
+@st.cache_data # Cache de 1 hora, los nombres no cambian mucho
 def cargar_head_count_supervisor():
     """Carga la tabla 'head_count_supervisor' de Supabase."""
     engine = get_database_engine()
@@ -669,7 +669,7 @@ def cargar_head_count_supervisor():
 # (Esto va DESPUÉS de la función cargar_head_count_supervisor)
 
 # --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE TÉCNICOS ---
-@st.cache_data(ttl=3600) # Cache de 1 hora
+@st.cache_data# Cache de 1 hora
 def cargar_head_count_tecnico():
     """Carga la tabla 'head_count_tecnico' de Supabase."""
     engine = get_database_engine()
@@ -1632,7 +1632,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
 # ***** FIN CAMBIO v2.7.5 *****
 
 # --- ¡NUEVO! FUNCIONES CRUD PARA LA BASE DE DATOS ---
-@st.cache_data(ttl=5)
+@st.cache_data
 def get_all_users():
     """Obtiene todos los usuarios de la tabla de login."""
     engine = get_database_engine()
