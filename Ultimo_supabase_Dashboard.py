@@ -967,12 +967,12 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         cond_mas_de_7 = resumen['Total'] > 7
         divisor = np.where(cond_mas_de_7, 7, resumen['Total'])
         resumen['Eficiencia_Total_%'] = np.where(divisor > 0,
-                                               round(resumen['Total Manejado'] * 100 / divisor, 1),
-                                               0.0)
+                                                round(resumen['Total Manejado'] * 100 / divisor, 1),
+                                                0.0)
     else:
         resumen['Eficiencia_Total_%'] = np.where(resumen['Total'] > 0,
-                                               round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
-                                               0.0)
+                                                round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
+                                                0.0)
     
     # --- ¡LÓGICA DE FILA TOTAL MODIFICADA! ---
     if not resumen.empty:
@@ -1518,7 +1518,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
                         )
                         fig_vencidos.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_vencidos.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                                   xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
+                                                xaxis_title=None, yaxis_title="Total PYMEs Vencidas", coloraxis_showscale=False)
                         st.plotly_chart(fig_vencidos, use_container_width=True, key=f"{page_key}_overdue_chart")
                     else:
                         st.info("No hay PYMEs vencidas para mostrar.")
@@ -1884,6 +1884,16 @@ menu = st.sidebar.radio("Selecciona una página", menu_options_base)
 # --- FIN DE LA CORRECCIÓN DE MENÚ ---
 
 st.sidebar.markdown("---")
+
+# --- ¡CAMBIO AQUÍ! Botón movido arriba de "Filtros" ---
+if st.session_state.user_role == "supervisor_old":
+    if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
+        # Limpia la caché de TODAS las funciones @st.cache_data
+        st.cache_data.clear()   
+        # Vuelve a ejecutar el script inmediatamente
+        st.rerun()
+# --- FIN DEL BLOQUE MOVIDO ---
+
 st.sidebar.subheader("Filtros")
 
 # Opciones de filtro basadas en df_unicos_base (solo hoy)
@@ -1905,15 +1915,6 @@ else:
     supervisor_sel = st.session_state.supervisor_id
 estatus_sel = st.sidebar.multiselect("Estado", options=estado_options, default=estado_options)
 
-# --- ¡NUEVO! Botón de Refresh Manual ---
-if st.session_state.user_role in ["supervisor_old"]:
-    st.sidebar.markdown("---") # Separador visual
-    if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
-        # Limpia la caché de TODAS las funciones @st.cache_data
-        st.cache_data.clear()   
-        # Vuelve a ejecutar el script inmediatamente
-        st.rerun()
-# --- FIN DEL NUEVO BLOQUE ---
 # --- DataFrames Filtrados (Basados en 'df' - solo NUEVOS HOY) ---
 df_supervisor_unicos = df_unicos_base.copy() if df_unicos_base is not None else pd.DataFrame()
 if not df_supervisor_unicos.empty:
@@ -1980,7 +1981,7 @@ if menu == "🏠 Principal":
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="principal",
             reabiertos_set=set_casos_reabiertos,
             df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
             critical_metric_key='Pendientes' 
         )
     else: 
@@ -2043,7 +2044,7 @@ elif menu == "📊 Análisis PYMEs":
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="pymes",
         reabiertos_set=set_casos_reabiertos,
         df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-        df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+        df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
         critical_metric_key='Pymes_Vencidos' 
     )
 
@@ -2098,7 +2099,7 @@ elif menu == "⏰ Puntualidad":
         page_key="puntualidad",
         reabiertos_set=set_casos_reabiertos,
         df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-        df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+        df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
         kpi_override=kpi_override_dict 
     )
 
@@ -2155,7 +2156,7 @@ elif menu == "🎯 Citas Puntuales":
         role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
         global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="citas",
         df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-        df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+        df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
         reabiertos_set=set_casos_reabiertos
     )
 
@@ -2357,7 +2358,7 @@ elif menu == "📅 Antiguas":
             role=st.session_state.user_role, role_supervisor_id=st.session_state.supervisor_id,
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel, page_key="antiguas_3_dias",
             df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
             reabiertos_set=set_casos_reabiertos
         )
     with tab2:
@@ -2372,7 +2373,7 @@ elif menu == "📅 Antiguas":
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="antiguas_extrema", critical_metric_key='Total',
             df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
             reabiertos_set=set_casos_reabiertos
         )
 
@@ -2416,7 +2417,7 @@ elif menu == "📈 Rendimiento":
             global_supervisor_sel=supervisor_sel, status_filter=estatus_sel,
             page_key="rendimiento", dt_inicio=dt_inicio, dt_fin=dt_fin,
             df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
-            df_hc_tecnicos=df_hc_tecnicos,       # <-- AÑADIDO
+            df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
             reabiertos_set=set_casos_reabiertos
         )
 
