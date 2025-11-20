@@ -1,10 +1,12 @@
 streamlit
 pandas
 streamlit-autorefresh
+extra-streamlit-components
 numpy
 plotly
 SQLAlchemy
 psycopg2-binary
 xlsxwriter
 bcrypt
+
 
