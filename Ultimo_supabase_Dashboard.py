@@ -187,9 +187,12 @@ def consultar_usuario(username, password_input):
 # 1. Configuración del Gestor de Cookies
 
 
-    return stx.CookieManager()
 
-cookie_manager = get_manager()
+
+# Simplemente eliminamos la función y el decorador.
+# Instanciamos el manager directamente.
+
+cookie_manager = stx.CookieManager()
 
 # 2. Función auxiliar: Buscar usuario por nombre (para validar la cookie)
 def consultar_usuario_por_username(username):
