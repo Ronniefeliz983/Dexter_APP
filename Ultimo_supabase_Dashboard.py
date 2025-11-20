@@ -489,40 +489,62 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
 
 def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
     """
-    Inyecta JS para lanzar una notificación del sistema.
-    SOLUCIÓN AL DESPLAZAMIENTO: Se inyecta dentro del sidebar para no mover el layout principal.
+    Inyecta JS para lanzar una notificación, PERO primero verifica en el localStorage
+    del dispositivo si ya se mostró esa alerta específica.
     """
-    # Limpiamos el mensaje de caracteres que rompen JS
     mensaje_safe = mensaje.replace('"', '').replace("'", "")
+    
+    # Usamos el tag_id como clave única para recordar
     
     js_script = f"""
     <script>
-        function sendNotification() {{
-            if (!("Notification" in window)) return;
-
-            if (Notification.permission === "granted") {{
-                new Notification("{titulo}", {{
-                    body: "{mensaje_safe}",
-                    icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
-                    tag: "{tag_id}",
-                    vibrate: [200, 100, 200]
-                }});
-            }} else if (Notification.permission !== "denied") {{
-                Notification.requestPermission().then(permission => {{
-                    if (permission === "granted") {{
-                        new Notification("{titulo}", {{
-                            body: "{mensaje_safe}",
-                            icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
-                            tag: "{tag_id}",
-                            vibrate: [200, 100, 200]
-                        }});
-                    }}
-                }});
+        (function() {{
+            // 1. Definir la clave única para este dispositivo
+            var storageKey = "alert_sent_" + "{tag_id}";
+            
+            // 2. Preguntar al navegador: ¿Ya mostré esto?
+            if (localStorage.getItem(storageKey) === "true") {{
+                console.log("Alerta {tag_id} ya mostrada en este dispositivo. Ignorando.");
+                return; // ¡SE DETIENE AQUÍ! No suena.
             }}
-        }}
-        sendNotification();
+
+            // 3. Si no se ha mostrado, procedemos con la lógica de notificación
+            function sendNotification() {{
+                if (!("Notification" in window)) return;
+
+                if (Notification.permission === "granted") {{
+                    new Notification("{titulo}", {{
+                        body: "{mensaje_safe}",
+                        icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
+                        tag: "{tag_id}",
+                        vibrate: [200, 100, 200]
+                    }});
+                    // MARCAR COMO MOSTRADO
+                    localStorage.setItem(storageKey, "true"); 
+                    
+                }} else if (Notification.permission !== "denied") {{
+                    Notification.requestPermission().then(permission => {{
+                        if (permission === "granted") {{
+                            new Notification("{titulo}", {{
+                                body: "{mensaje_safe}",
+                                icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
+                                tag: "{tag_id}",
+                                vibrate: [200, 100, 200]
+                            }});
+                            // MARCAR COMO MOSTRADO
+                            localStorage.setItem(storageKey, "true");
+                        }}
+                    }});
+                }}
+            }}
+            
+            sendNotification();
+        }})();
     </script>
     """
+    
+    with st.sidebar:
+        components.html(js_script, height=0, width=0)
     
     # --- AQUÍ ESTÁ LA MAGIA ---
     # Usamos 'with st.sidebar:' para que el script invisible se cargue 
@@ -2734,4 +2756,5 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
