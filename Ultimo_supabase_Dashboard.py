@@ -562,41 +562,55 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
 def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
-    # 1. Toast visual (siempre útil)
-    st.toast(f"**{titulo}**\n\n{mensaje}", icon="🔔")
-
+    """
+    Lanza una notificación al sistema (Android o PC) SIN mostrar un aviso visual (Toast) dentro de la app.
+    """
     mensaje_safe = mensaje.replace('"', '').replace("'", "")
     
     # INYECCIÓN DE JAVASCRIPT
+    # Este script es invisible. No pinta nada en pantalla, solo ejecuta lógica.
     js_script = f"""
     <script>
         (function() {{
-            // Evitar repetir la misma alerta si ya sonó
+            // Evitar repetir la misma alerta si ya sonó en este dispositivo
             var storageKey = "alert_sent_" + "{tag_id}";
             if (localStorage.getItem(storageKey) === "true") return;
 
-            // --- PASO CRÍTICO: INTENTAR LLAMAR AL APK ANDROID ---
-            // Buscamos la interfaz "AndroidInterface" que creamos en Kotlin
+            // ---------------------------------------------------------
+            // 1. MODO ANDROID (APK)
+            // ---------------------------------------------------------
+            // Si detecta que está dentro de tu APK, llama a la función nativa.
+            // Esto hará que el celular vibre/suene en la barra de estado,
+            // pero NO mostrará nada dentro de la página web de Streamlit.
             if (typeof AndroidInterface !== "undefined") {{
                 try {{
                     AndroidInterface.showNotification("{titulo}", "{mensaje_safe}");
                     localStorage.setItem(storageKey, "true");
-                    return; // Si funcionó en Android, terminamos aquí
+                    return; // Terminamos aquí para Android
                 }} catch(e) {{
                     console.log("Error llamando a Android: " + e);
                 }}
             }}
 
-            // --- FALLBACK: SI ESTAMOS EN PC (Chrome/Edge) ---
+            // ---------------------------------------------------------
+            // 2. MODO PC / NAVEGADOR WEB (Fallback)
+            // ---------------------------------------------------------
+            // Si no es la APK, intenta usar las notificaciones de Chrome/Edge
             if (!("Notification" in window)) return;
             
             if (Notification.permission === "granted") {{
-                new Notification("{titulo}", {{ body: "{mensaje_safe}" }});
+                new Notification("{titulo}", {{ 
+                    body: "{mensaje_safe}",
+                    icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png"
+                }});
                 localStorage.setItem(storageKey, "true");
             }} else if (Notification.permission !== "denied") {{
                 Notification.requestPermission().then(permission => {{
                     if (permission === "granted") {{
-                        new Notification("{titulo}", {{ body: "{mensaje_safe}" }});
+                        new Notification("{titulo}", {{ 
+                            body: "{mensaje_safe}",
+                            icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png"
+                        }});
                         localStorage.setItem(storageKey, "true");
                     }}
                 }});
@@ -605,10 +619,9 @@ def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
     </script>
     """
     
-    # Inyectar el script invisible en el sidebar
+    # Inyectamos el script de forma invisible
     with st.sidebar:
         components.html(js_script, height=0, width=0)
-    
     # --- AQUÍ ESTÁ LA MAGIA ---
     # Usamos 'with st.sidebar:' para que el script invisible se cargue 
     # en el menú lateral y NO empuje tu título ni tus tarjetas hacia abajo.
@@ -2819,6 +2832,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
