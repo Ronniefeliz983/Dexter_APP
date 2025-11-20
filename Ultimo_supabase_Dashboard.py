@@ -488,61 +488,50 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
 def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
-    """
-    Inyecta JS para lanzar una notificación, PERO primero verifica en el localStorage
-    del dispositivo si ya se mostró esa alerta específica.
-    """
+    # 1. Toast visual (siempre útil)
+    st.toast(f"**{titulo}**\n\n{mensaje}", icon="🔔")
+
     mensaje_safe = mensaje.replace('"', '').replace("'", "")
     
-    # Usamos el tag_id como clave única para recordar
-    
+    # INYECCIÓN DE JAVASCRIPT
     js_script = f"""
     <script>
         (function() {{
-            // 1. Definir la clave única para este dispositivo
+            // Evitar repetir la misma alerta si ya sonó
             var storageKey = "alert_sent_" + "{tag_id}";
-            
-            // 2. Preguntar al navegador: ¿Ya mostré esto?
-            if (localStorage.getItem(storageKey) === "true") {{
-                console.log("Alerta {tag_id} ya mostrada en este dispositivo. Ignorando.");
-                return; // ¡SE DETIENE AQUÍ! No suena.
-            }}
+            if (localStorage.getItem(storageKey) === "true") return;
 
-            // 3. Si no se ha mostrado, procedemos con la lógica de notificación
-            function sendNotification() {{
-                if (!("Notification" in window)) return;
-
-                if (Notification.permission === "granted") {{
-                    new Notification("{titulo}", {{
-                        body: "{mensaje_safe}",
-                        icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
-                        tag: "{tag_id}",
-                        vibrate: [200, 100, 200]
-                    }});
-                    // MARCAR COMO MOSTRADO
-                    localStorage.setItem(storageKey, "true"); 
-                    
-                }} else if (Notification.permission !== "denied") {{
-                    Notification.requestPermission().then(permission => {{
-                        if (permission === "granted") {{
-                            new Notification("{titulo}", {{
-                                body: "{mensaje_safe}",
-                                icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
-                                tag: "{tag_id}",
-                                vibrate: [200, 100, 200]
-                            }});
-                            // MARCAR COMO MOSTRADO
-                            localStorage.setItem(storageKey, "true");
-                        }}
-                    }});
+            // --- PASO CRÍTICO: INTENTAR LLAMAR AL APK ANDROID ---
+            // Buscamos la interfaz "AndroidInterface" que creamos en Kotlin
+            if (typeof AndroidInterface !== "undefined") {{
+                try {{
+                    AndroidInterface.showNotification("{titulo}", "{mensaje_safe}");
+                    localStorage.setItem(storageKey, "true");
+                    return; // Si funcionó en Android, terminamos aquí
+                }} catch(e) {{
+                    console.log("Error llamando a Android: " + e);
                 }}
             }}
+
+            // --- FALLBACK: SI ESTAMOS EN PC (Chrome/Edge) ---
+            if (!("Notification" in window)) return;
             
-            sendNotification();
+            if (Notification.permission === "granted") {{
+                new Notification("{titulo}", {{ body: "{mensaje_safe}" }});
+                localStorage.setItem(storageKey, "true");
+            }} else if (Notification.permission !== "denied") {{
+                Notification.requestPermission().then(permission => {{
+                    if (permission === "granted") {{
+                        new Notification("{titulo}", {{ body: "{mensaje_safe}" }});
+                        localStorage.setItem(storageKey, "true");
+                    }}
+                }});
+            }}
         }})();
     </script>
     """
     
+    # Inyectar el script invisible en el sidebar
     with st.sidebar:
         components.html(js_script, height=0, width=0)
     
@@ -2756,5 +2745,6 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
