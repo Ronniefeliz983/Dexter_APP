@@ -185,8 +185,8 @@ def consultar_usuario(username, password_input):
         return None
 
 # 1. Configuración del Gestor de Cookies
-@st.cache_resource()
-def get_manager():
+
+
     return stx.CookieManager()
 
 cookie_manager = get_manager()
