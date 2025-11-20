@@ -3,8 +3,6 @@ import pandas as pd
 from datetime import datetime, time, timedelta
 from streamlit_autorefresh import st_autorefresh # <-- 1. VUELVE A IMPORTARSE
 import streamlit.components.v1 as components
-import extra_streamlit_components as stx
-import time
 import numpy as np
 from io import BytesIO
 import os # Importado para la conexión
@@ -490,52 +488,41 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
 def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
-    # 1. Toast visual (siempre útil)
-    st.toast(f"**{titulo}**\n\n{mensaje}", icon="🔔")
-
+    """
+    Inyecta JS para lanzar una notificación del sistema.
+    SOLUCIÓN AL DESPLAZAMIENTO: Se inyecta dentro del sidebar para no mover el layout principal.
+    """
+    # Limpiamos el mensaje de caracteres que rompen JS
     mensaje_safe = mensaje.replace('"', '').replace("'", "")
     
-    # INYECCIÓN DE JAVASCRIPT
     js_script = f"""
     <script>
-        (function() {{
-            // Evitar repetir la misma alerta si ya sonó
-            var storageKey = "alert_sent_" + "{tag_id}";
-            if (localStorage.getItem(storageKey) === "true") return;
-
-            // --- PASO CRÍTICO: INTENTAR LLAMAR AL APK ANDROID ---
-            // Buscamos la interfaz "AndroidInterface" que creamos en Kotlin
-            if (typeof AndroidInterface !== "undefined") {{
-                try {{
-                    AndroidInterface.showNotification("{titulo}", "{mensaje_safe}");
-                    localStorage.setItem(storageKey, "true");
-                    return; // Si funcionó en Android, terminamos aquí
-                }} catch(e) {{
-                    console.log("Error llamando a Android: " + e);
-                }}
-            }}
-
-            // --- FALLBACK: SI ESTAMOS EN PC (Chrome/Edge) ---
+        function sendNotification() {{
             if (!("Notification" in window)) return;
-            
+
             if (Notification.permission === "granted") {{
-                new Notification("{titulo}", {{ body: "{mensaje_safe}" }});
-                localStorage.setItem(storageKey, "true");
+                new Notification("{titulo}", {{
+                    body: "{mensaje_safe}",
+                    icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
+                    tag: "{tag_id}",
+                    vibrate: [200, 100, 200]
+                }});
             }} else if (Notification.permission !== "denied") {{
                 Notification.requestPermission().then(permission => {{
                     if (permission === "granted") {{
-                        new Notification("{titulo}", {{ body: "{mensaje_safe}" }});
-                        localStorage.setItem(storageKey, "true");
+                        new Notification("{titulo}", {{
+                            body: "{mensaje_safe}",
+                            icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
+                            tag: "{tag_id}",
+                            vibrate: [200, 100, 200]
+                        }});
                     }}
                 }});
             }}
-        }})();
+        }}
+        sendNotification();
     </script>
     """
-    
-    # Inyectar el script invisible en el sidebar
-    with st.sidebar:
-        components.html(js_script, height=0, width=0)
     
     # --- AQUÍ ESTÁ LA MAGIA ---
     # Usamos 'with st.sidebar:' para que el script invisible se cargue 
@@ -2747,8 +2734,4 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
-
-
-
-
 
