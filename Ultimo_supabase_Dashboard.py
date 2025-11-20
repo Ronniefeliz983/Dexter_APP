@@ -489,8 +489,8 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
 
 def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
     """
-    Inyecta JS para lanzar una notificación del sistema Android/Browser.
-    tag_id: Un identificador único para evitar duplicados visuales en la barra.
+    Inyecta JS para lanzar una notificación del sistema.
+    SOLUCIÓN AL DESPLAZAMIENTO: Se inyecta dentro del sidebar para no mover el layout principal.
     """
     # Limpiamos el mensaje de caracteres que rompen JS
     mensaje_safe = mensaje.replace('"', '').replace("'", "")
@@ -504,7 +504,7 @@ def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
                 new Notification("{titulo}", {{
                     body: "{mensaje_safe}",
                     icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
-                    tag: "{tag_id}", // Si envías otra con el mismo tag, reemplaza la anterior
+                    tag: "{tag_id}",
                     vibrate: [200, 100, 200]
                 }});
             }} else if (Notification.permission !== "denied") {{
@@ -523,7 +523,12 @@ def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
         sendNotification();
     </script>
     """
-    components.html(js_script, height=0, width=0)
+    
+    # --- AQUÍ ESTÁ LA MAGIA ---
+    # Usamos 'with st.sidebar:' para que el script invisible se cargue 
+    # en el menú lateral y NO empuje tu título ni tus tarjetas hacia abajo.
+    with st.sidebar:
+        components.html(js_script, height=0, width=0)
 
 def gestionar_reglas_notificaciones(df_hoy):
     """
