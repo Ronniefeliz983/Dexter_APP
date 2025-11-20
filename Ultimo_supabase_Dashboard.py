@@ -629,13 +629,26 @@ def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
 
 def boton_activar_notificaciones_movil():
     """
-    Crea un botón que SOLO SE MUESTRA en dispositivos móviles.
-    Usa st.markdown para evitar el 'espacio fantasma' en PC.
+    Crea un botón que SOLO SE MUESTRA en móviles.
+    Usa st.markdown para que en PC no ocupe espacio (altura 0).
     """
+    # CSS: Por defecto 'display: none' (oculto).
+    # Solo si la pantalla es menor a 768px (móvil) se pone 'display: block'.
     js_button = """
     <style>
-        .mobile-only-btn {
+        .mobile-btn-container {
             display: none;
+        }
+        @media only screen and (max-width: 768px) {
+            .mobile-btn-container {
+                display: block;
+                margin-bottom: 15px;
+            }
+        }
+    </style>
+
+    <div class="mobile-btn-container">
+        <button onclick="solicitarPermisos()" style="
             width: 100%;
             padding: 8px;
             background-color: #FF4B4B;
@@ -645,33 +658,34 @@ def boton_activar_notificaciones_movil():
             cursor: pointer;
             font-weight: bold;
             font-family: sans-serif;
-            margin-bottom: 10px;
-            text-align: center;
-        }
-        /* Solo mostrar si la pantalla es pequeña (Celular) */
-        @media only screen and (max-width: 768px) {
-            .mobile-only-btn { display: block !important; }
-        }
-    </style>
-
-    <div id="btn-notif-wrapper">
-        <button onclick="solicitarPermisos()" class="mobile-only-btn">
+        ">
             🔔 Activar Notificaciones
         </button>
     </div>
 
     <script>
     function solicitarPermisos() {
+        // 1. Intento Android Nativo (WebView)
         if (typeof AndroidInterface !== "undefined") {
-            try { AndroidInterface.showNotification("🔔 Activado", "Notificaciones listas."); } catch(e) {}
-        } else if ("Notification" in window) {
-            Notification.requestPermission().then(p => {
-                if (p === "granted") new Notification("✅ Activado", { body: "Listo." });
+            try {
+                AndroidInterface.showNotification("🔔 Activado", "Notificaciones listas.");
+            } catch(e) {}
+        } 
+        // 2. Intento Web Standard
+        else if ("Notification" in window) {
+            Notification.requestPermission().then(permission => {
+                if (permission === "granted") {
+                    new Notification("✅ Activado", { body: "Listo." });
+                }
             });
-        } else { alert("No soportado."); }
+        } else {
+            alert("No soportado.");
+        }
     }
     </script>
     """
+    
+    # USAMOS MARKDOWN CON HTML: Esto evita la caja vacía (iframe) de components.html
     st.sidebar.markdown(js_button, unsafe_allow_html=True)
 
 def gestionar_reglas_notificaciones(df_hoy):
