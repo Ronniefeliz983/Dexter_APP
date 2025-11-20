@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time, timedelta
 from streamlit_autorefresh import st_autorefresh # <-- 1. VUELVE A IMPORTARSE
+import streamlit.components.v1 as components
 import numpy as np
 from io import BytesIO
 import os # Importado para la conexión
@@ -486,6 +487,153 @@ def analizar_reabiertos(_df_historial, _df_reabiertos):
         return pd.DataFrame()
 # --- FIN DE LA NUEVA FUNCIÓN ---
 
+def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
+    """
+    Inyecta JS para lanzar una notificación del sistema Android/Browser.
+    tag_id: Un identificador único para evitar duplicados visuales en la barra.
+    """
+    # Limpiamos el mensaje de caracteres que rompen JS
+    mensaje_safe = mensaje.replace('"', '').replace("'", "")
+    
+    js_script = f"""
+    <script>
+        function sendNotification() {{
+            if (!("Notification" in window)) return;
+
+            if (Notification.permission === "granted") {{
+                new Notification("{titulo}", {{
+                    body: "{mensaje_safe}",
+                    icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
+                    tag: "{tag_id}", // Si envías otra con el mismo tag, reemplaza la anterior
+                    vibrate: [200, 100, 200]
+                }});
+            }} else if (Notification.permission !== "denied") {{
+                Notification.requestPermission().then(permission => {{
+                    if (permission === "granted") {{
+                        new Notification("{titulo}", {{
+                            body: "{mensaje_safe}",
+                            icon: "https://cdn-icons-png.flaticon.com/512/564/564619.png",
+                            tag: "{tag_id}",
+                            vibrate: [200, 100, 200]
+                        }});
+                    }}
+                }});
+            }}
+        }}
+        sendNotification();
+    </script>
+    """
+    components.html(js_script, height=0, width=0)
+
+def gestionar_reglas_notificaciones(df_hoy):
+    """
+    Evalúa las 3 reglas de negocio y dispara notificaciones si es necesario.
+    """
+    # 0. Validaciones iniciales
+    if df_hoy is None or df_hoy.empty: return
+    if st.session_state.user_role != "supervisor": return # Solo para rol supervisor
+
+    # Inicializar historial de notificaciones en sesión si no existe
+    if 'alertas_enviadas' not in st.session_state:
+        st.session_state.alertas_enviadas = set()
+
+    ahora = get_current_ast_time() # Usamos tu función de hora AST
+    
+    # ==========================================================================
+    # REGLA 1: DETECTAR PYME NUEVA
+    # ==========================================================================
+    # Filtramos PYMEs
+    if 'Es_PYME_Negocio' in df_hoy.columns:
+        df_pymes = df_hoy[df_hoy['Es_PYME_Negocio'] == True]
+        
+        for _, row in df_pymes.iterrows():
+            orden = str(row['OrdenExterna'])
+            key_nueva = f"new_pyme_{orden}"
+            
+            if key_nueva not in st.session_state.alertas_enviadas:
+                lanzar_notificacion_nativa(
+                    "🏢 Nueva PYME Detectada", 
+                    f"Ticket: {orden} | Cliente: {row.get('Cliente', 'N/A')}",
+                    key_nueva
+                )
+                st.session_state.alertas_enviadas.add(key_nueva)
+
+    # ==========================================================================
+    # REGLA 2: ALERTAS DE VENCIMIENTO (1:30, 1:00, 0:30, Vencido)
+    # ==========================================================================
+    # Filtramos PYMEs que estén pendientes (Activo/Iniciado) y tengan fecha de vencimiento
+    if 'Es_PYME_Negocio' in df_hoy.columns and 'Vence en' in df_hoy.columns:
+        # Asegurar que sea datetime
+        # (Asumimos que 'Vence en' ya viene procesada de cargar_datos, si no, convertir)
+        mask_pendientes = df_hoy['Estado'].astype(str).str.lower().isin(['activo', 'iniciado'])
+        pymes_activas = df_hoy[ (df_hoy['Es_PYME_Negocio'] == True) & mask_pendientes & df_hoy['Vence en'].notna() ]
+
+        for _, row in pymes_activas.iterrows():
+            orden = str(row['OrdenExterna'])
+            vence_dt = row['Vence en']
+            
+            # Asegurar que vence_dt es naive o compatible con 'ahora'
+            if vence_dt.tzinfo is not None: vence_dt = vence_dt.tz_localize(None)
+            
+            minutos_restantes = (vence_dt - ahora).total_seconds() / 60
+            
+            # Definimos los hitos de alerta (en minutos)
+            # 90 min (1h 30m), 60 min, 30 min, 0 min (Vencido)
+            hitos = [90, 60, 30, 0]
+            
+            for hito in hitos:
+                # Margen de tolerancia de 5 minutos para detectar el hito
+                # Ejemplo: Si faltan 88 minutos, entra en el hito de 90
+                if hito - 5 <= minutos_restantes <= hito + 5:
+                    key_hito = f"pyme_time_{orden}_{hito}"
+                    if key_hito not in st.session_state.alertas_enviadas:
+                        if hito == 0:
+                            msg = f"🚨 ¡SE VENCIÓ! La PYME {orden} ha expirado."
+                        else:
+                            msg = f"⏳ Atento: A la PYME {orden} le quedan {int(minutos_restantes)} minutos."
+                        
+                        lanzar_notificacion_nativa("⏱️ Alerta de Tiempo PYME", msg, key_hito)
+                        st.session_state.alertas_enviadas.add(key_hito)
+                
+                # Caso especial: Ya se venció por mucho (más de 5 min negativos)
+                if minutos_restantes < -5:
+                     key_vencido = f"pyme_vencido_final_{orden}"
+                     if key_vencido not in st.session_state.alertas_enviadas:
+                        lanzar_notificacion_nativa("💀 PYME Vencida", f"La orden {orden} está vencida hace rato.", key_vencido)
+                        st.session_state.alertas_enviadas.add(key_vencido)
+
+    # ==========================================================================
+    # REGLA 3: TÉCNICO SIN CERRAR (DESPUÉS DE LAS 12:00 PM)
+    # ==========================================================================
+    hora_limite = 12 # 12 PM
+    
+    if ahora.hour >= hora_limite:
+        # Agrupar por técnico y ver sus estados
+        # Buscamos técnicos que tengan tickets HOY pero NINGUNO cerrado
+        if 'Asignado_A' in df_hoy.columns and 'Estado' in df_hoy.columns:
+            
+            # Lista de todos los técnicos con carga hoy
+            tecnicos = df_hoy['Asignado_A'].unique()
+            
+            for tec in tecnicos:
+                df_tec = df_hoy[df_hoy['Asignado_A'] == tec]
+                
+                # Contamos cuántos cerrados tiene
+                cerrados = df_tec[df_tec['Estado'].astype(str).str.lower().isin(['cerrado', 'validacion ext'])].shape[0]
+                
+                if cerrados == 0:
+                    # Definimos una key única por día para no spamear todo el rato, 
+                    # o usamos una key por hora si quieres insistencia.
+                    # Usaremos key por hora para insistir cada hora si sigue en 0.
+                    key_tec = f"tec_inactivo_{tec}_{ahora.date()}_{ahora.hour}"
+                    
+                    if key_tec not in st.session_state.alertas_enviadas:
+                        lanzar_notificacion_nativa(
+                            "💤 Alerta de Productividad", 
+                            f"El técnico {tec} no ha cerrado tickets hoy (y ya pasaron las 12:00).",
+                            key_tec
+                        )
+                        st.session_state.alertas_enviadas.add(key_tec)
 
 # --- Mapeo y Carga de Datos (Sin Cambios) ---
 def get_column_mappings():
@@ -1970,6 +2118,8 @@ if not df_supervisor_unicos.empty:
     if st.session_state.user_role == "supervisor":
         if 'Supervisor' in df_supervisor_unicos.columns:
             df_supervisor_unicos = df_supervisor_unicos[df_supervisor_unicos['Supervisor'].astype(str) == str(st.session_state.supervisor_id)]
+            # ¡LLAMADA A LA FUNCIÓN MAGICA!
+            gestionar_reglas_notificaciones(df_supervisor_unicos)
         else:
             df_supervisor_unicos = pd.DataFrame(columns=df_unicos_base.columns if df_unicos_base is not None else [])
     elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
@@ -2579,3 +2729,4 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
