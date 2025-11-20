@@ -624,9 +624,55 @@ def lanzar_notificacion_nativa(titulo, mensaje, tag_id):
         components.html(js_script, height=0, width=0)
     # --- AQUÍ ESTÁ LA MAGIA ---
     # Usamos 'with st.sidebar:' para que el script invisible se cargue 
-    # en el menú lateral y NO empuje tu título ni tus tarjetas hacia abajo.
-    with st.sidebar:
-        components.html(js_script, height=0, width=0)
+
+# --- PEGAR ESTO JUSTO DESPUÉS DE 'lanzar_notificacion_nativa' ---
+
+def boton_activar_notificaciones_movil():
+    """
+    Crea un botón que SOLO SE MUESTRA en dispositivos móviles.
+    Usa st.markdown para evitar el 'espacio fantasma' en PC.
+    """
+    js_button = """
+    <style>
+        .mobile-only-btn {
+            display: none;
+            width: 100%;
+            padding: 8px;
+            background-color: #FF4B4B;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-family: sans-serif;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        /* Solo mostrar si la pantalla es pequeña (Celular) */
+        @media only screen and (max-width: 768px) {
+            .mobile-only-btn { display: block !important; }
+        }
+    </style>
+
+    <div id="btn-notif-wrapper">
+        <button onclick="solicitarPermisos()" class="mobile-only-btn">
+            🔔 Activar Notificaciones
+        </button>
+    </div>
+
+    <script>
+    function solicitarPermisos() {
+        if (typeof AndroidInterface !== "undefined") {
+            try { AndroidInterface.showNotification("🔔 Activado", "Notificaciones listas."); } catch(e) {}
+        } else if ("Notification" in window) {
+            Notification.requestPermission().then(p => {
+                if (p === "granted") new Notification("✅ Activado", { body: "Listo." });
+            });
+        } else { alert("No soportado."); }
+    }
+    </script>
+    """
+    st.sidebar.markdown(js_button, unsafe_allow_html=True)
 
 def gestionar_reglas_notificaciones(df_hoy):
     """
@@ -2167,6 +2213,7 @@ df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
 
 st.sidebar.title("📌 Menú")
 
+boton_activar_notificaciones_movil()
 # --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
 # AÑADIDO "🔄 Reabiertos" v2.7.3
 menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"] 
@@ -2832,6 +2879,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
