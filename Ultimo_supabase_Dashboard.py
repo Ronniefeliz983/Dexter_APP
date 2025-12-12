@@ -1888,10 +1888,11 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             if agrupar_por in df_page_data.columns:
                 
                 # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
-                resumen = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
+                resumen = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
+
                 
                 if not resumen.empty:
-                    resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
+                    # resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                     if es_logica_tecnico:
                         st.dataframe(
                             resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
@@ -2304,10 +2305,10 @@ if menu == "🏠 Principal":
         if agrupar_por in df_unicos.columns:
             
             # --- ¡CORRECCIÓN AQUÍ! Se pasan ambas tablas HC ---
-            resumen = crear_resumen_admin(df_unicos, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False, reabiertos_set=set_casos_reabiertos)
+            resumen = crear_resumen_admin(df_unicos, df_hc_supervisores, df_hc_tecnicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=False, es_puntualidad_page=False, reabiertos_set=set_casos_reabiertos)
             
             if not resumen.empty:
-                resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
+                #resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
                 if es_logica_tecnico:
                     st.dataframe(
                         resumen.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
