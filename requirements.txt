@@ -4,9 +4,7 @@ streamlit-autorefresh
 extra-streamlit-components
 numpy
 plotly
-SQLAlchemy
+sqlalchemy
 psycopg2-binary
 xlsxwriter
 bcrypt
-
-
