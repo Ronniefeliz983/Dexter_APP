@@ -1155,8 +1155,10 @@ def aplicar_estilo_resumen_tecnico(row):
 # --- ¡FUNCIÓN MODIFICADA! ---
 # --- ¡FUNCIÓN MODIFICADA! ---
 # --- ¡FUNCIÓN MODIFICADA! ---
-def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False):
-    # --- MODIFICADO: Definición de columnas base (sin 'nombre' todavía) ---
+# --- ¡FUNCIÓN MODIFICADA v2.7.8! ---
+# Se añade el parámetro 'reabiertos_set' para calcular la columna 'Reabiertos'
+def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False, reabiertos_set=None):
+    # --- MODIFICADO: Definición de columnas base ---
     cols_base = [
         agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
         'Pendientes', 'Total Manejado'
@@ -1164,13 +1166,15 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
     
     # --- Añadir columnas PYME solo si es la página de PYME ---
     if es_pyme_page:
-        cols = cols_base + ['Cerrados en Tiempo', 'Vencidos', 'Eficiencia_Total_%']
+        cols = cols_base + ['Cerrados en Tiempo', 'Vencidos', 'Reabiertos', 'Eficiencia_Total_%']
     else:
-        cols = cols_base + ['Eficiencia_Total_%']
+        cols = cols_base + ['Reabiertos', 'Eficiencia_Total_%']
 
+    # Inicializar reabiertos_set si es None
+    if reabiertos_set is None:
+        reabiertos_set = set()
     
     if df is None or df.empty:
-        # Columna 'nombre' ya no se añade aquí
         return pd.DataFrame(columns=cols)
     
     if agrupar_por not in df.columns or 'OrdenExterna' not in df.columns or 'Estado' not in df.columns:
@@ -1180,6 +1184,10 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
     df_copy = df.copy()
     df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str).str.lower()
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
+
+    # --- ¡NUEVO v2.7.8! Marcar los tickets que son reabiertos ---
+    df_copy['Es_Reabierto'] = df_copy['OrdenExterna'].astype(str).isin(reabiertos_set)
+    # --- FIN NUEVO v2.7.8 ---
 
     # --- Lógica Pyme (sin cambios) ---
     if es_pyme_page and 'Vencido' in df_copy.columns:
@@ -1195,13 +1203,15 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
     # --- Lógica de Puntualidad (sin cambios) ---
     estados_citados = ['pendiente de calendarizacion', 'calendarizado']
     
-    # Pre-calcular las categorías (sin cambios)
+    # Pre-calcular las categorías
     agg_dict_base = {
         'Cerrados': ('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
         'Referidos': ('Estado', lambda x: (x == 'pend trab interno').sum()),
         'Citados': ('Estado', lambda x: x.isin(estados_citados).sum()),
         'Rebote': ('Estado', lambda x: (x == 'validacion int').sum()),
-        'Pendientes': ('Estado', lambda x: x.isin(['activo', 'iniciado']).sum())
+        'Pendientes': ('Estado', lambda x: x.isin(['activo', 'iniciado']).sum()),
+        # --- ¡NUEVO v2.7.8! Agregar conteo de reabiertos ---
+        'Reabiertos': ('Es_Reabierto', 'sum')
     }
     
     if es_puntualidad_page:
@@ -1216,7 +1226,7 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
     # Calcular el resumen con TODOS los datos
     resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
 
-    # --- ¡BLOQUE DE MERGE MODIFICADO PARA USAR AMBOS HC! ---
+    # --- BLOQUE DE MERGE (sin cambios) ---
     df_nombres_para_merge = None
     if agrupar_por == 'Supervisor' and df_hc_supervisores is not None and not df_hc_supervisores.empty:
         df_nombres_para_merge = df_hc_supervisores
@@ -1225,40 +1235,25 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
 
     if df_nombres_para_merge is not None:
         try:
-            # 1. Guardar el ID original para el merge
             resumen['merge_key'] = resumen[agrupar_por].astype(str).str.lower()
             
             resumen = pd.merge(
                 resumen,
-                df_nombres_para_merge, # Usar el DF dinámico (tecnico o supervisor)
+                df_nombres_para_merge,
                 left_on='merge_key', 
                 right_on='tarjeta',
                 how='left'
             )
             resumen.drop(columns=['tarjeta', 'merge_key'], inplace=True, errors='ignore') 
-            
-            # 2. Llenar NAs y capitalizar nombres
             resumen['nombre'] = resumen['nombre'].fillna('Nombre no encontrado').astype(str).str.title()
-            
-            # 3. Crear la columna combinada
-            #    'agrupar_por' (Supervisor o Asignado_A) todavía contiene el ID
             resumen['Columna_Combinada'] = resumen['nombre'] + " (" + resumen[agrupar_por].astype(str) + ")"
-            
-            # 4. Corregir los que no se encontraron
-            mask_no_encontrado = resumen['nombre'] == 'Nombre No Encontrado' # .title() lo capitalizó
+            mask_no_encontrado = resumen['nombre'] == 'Nombre No Encontrado'
             resumen.loc[mask_no_encontrado, 'Columna_Combinada'] = resumen.loc[mask_no_encontrado, agrupar_por]
-            
-            # 5. Eliminar la columna ID original y 'nombre'
             resumen.drop(columns=[agrupar_por, 'nombre'], inplace=True)
-            
-            # 6. Renombrar la nueva columna combinada
             resumen.rename(columns={'Columna_Combinada': agrupar_por}, inplace=True)
             
         except Exception as e:
             st.warning(f"No se pudo hacer merge con nombres de {agrupar_por}: {e}")
-            # Si falla, no se crea la columna 'nombre' y el código sigue
-    
-    # --- FIN DE MODIFICACIÓN DE MERGE ---
 
     # --- Lógica de 'Total Manejado' y 'Eficiencia' (sin cambios) ---
     if es_pyme_page:
@@ -1280,19 +1275,17 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
                                                 round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
                                                 0.0)
     
-    # --- ¡LÓGICA DE FILA TOTAL MODIFICADA! ---
+    # --- FILA TOTAL MODIFICADA ---
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         
-        # --- ¡NUEVO! Conteo de filas (Solo número) ---
-        num_filas = len(resumen) # Contamos las filas ANTES de añadir el total
-        if logica_tecnico: # Esta variable ya se pasa a la función
-            total_row[agrupar_por] = f"TOTAL ({num_filas})" # <-- MODIFICADO
+        num_filas = len(resumen)
+        if logica_tecnico:
+            total_row[agrupar_por] = f"TOTAL ({num_filas})"
         elif agrupar_por == 'Supervisor':
-             total_row[agrupar_por] = f"TOTAL ({num_filas})" # <-- MODIFICADO
+             total_row[agrupar_por] = f"TOTAL ({num_filas})"
         else:
              total_row[agrupar_por] = 'TOTAL'
-        # --- FIN DE LA MODIFICACIÓN ---
         
         total_row['Total'] = resumen['Total'].sum()
         total_row['Cerrados'] = resumen['Cerrados'].sum()
@@ -1301,6 +1294,8 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         total_row['Rebote'] = resumen['Rebote'].sum()
         total_row['Pendientes'] = resumen['Pendientes'].sum()
         total_row['Total Manejado'] = resumen['Total Manejado'].sum()
+        # --- ¡NUEVO v2.7.8! Sumar reabiertos en el total ---
+        total_row['Reabiertos'] = resumen['Reabiertos'].sum()
         
         if es_pyme_page:
             total_row['Vencidos'] = resumen['Vencidos'].sum()
@@ -1312,20 +1307,19 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
     
-    # ¡MODIFICADO! Lógica de orden de columnas (SE ELIMINA 'nombre')
+    # ¡MODIFICADO! Lógica de orden de columnas (con 'Reabiertos')
     if es_pyme_page:
         column_order = [
             agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
             'Pendientes', 'Total Manejado', 'Cerrados en Tiempo', 'Vencidos', 
-            'Eficiencia_Total_%'
+            'Reabiertos', 'Eficiencia_Total_%'
         ]
     else:
         column_order = [
             agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
-            'Pendientes', 'Total Manejado', 'Eficiencia_Total_%'
+            'Pendientes', 'Total Manejado', 'Reabiertos', 'Eficiencia_Total_%'
         ]
     
-    # Esta línea se encarga de ignorar 'nombre' si no existe (ej. al agrupar por Técnico)
     final_columns_present = [col for col in column_order if col in resumen.columns]
     resumen = resumen[final_columns_present]
 
@@ -1758,7 +1752,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("👥 Desglose por Supervisor")
         
         # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
-        resumen_admin = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+        resumen_admin = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
         
         if resumen_admin.empty or resumen_admin['Total'].sum() == 0:
             st.warning("No hay datos de supervisores para graficar con los filtros actuales.")
@@ -1856,7 +1850,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("👥 Resumen por Supervisor")
         
         # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
-        resumen_sup = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+        resumen_sup = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
         
         st.dataframe(
             resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
@@ -1867,7 +1861,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
             # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
-            resumen_tec = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+            resumen_tec = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
             
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
@@ -1895,7 +1889,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
             if agrupar_por in df_page_data.columns:
                 
                 # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
-                resumen = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag)
+                resumen = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
                 
                 if not resumen.empty:
                     resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
@@ -2311,7 +2305,7 @@ if menu == "🏠 Principal":
         if agrupar_por in df_unicos.columns:
             
             # --- ¡CORRECCIÓN AQUÍ! Se pasan ambas tablas HC ---
-            resumen = crear_resumen_admin(df_unicos, df_hc_supervisores, df_hc_tecnicos, agrupar_por=agrupar_por, logica_tecnico=es_logica_tecnico, es_pyme_page=False)
+            resumen = crear_resumen_admin(df_unicos, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False, reabiertos_set=set_casos_reabiertos)
             
             if not resumen.empty:
                 resumen.rename(columns={'Supervisor': agrupar_por}, inplace=True, errors='ignore')
@@ -2840,6 +2834,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
