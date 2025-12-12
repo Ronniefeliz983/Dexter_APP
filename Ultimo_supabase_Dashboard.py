@@ -240,18 +240,22 @@ def verificar_login():
         st.sidebar.success(f"👤 **{nombre_a_mostrar}**")
 
         # Botón de Cerrar Sesión
+        # Botón de Cerrar Sesión
         if st.sidebar.button("🚪 Cerrar Sesión"):
-            # 1. Ordenar borrar la cookie (CON MANEJO DE ERRORES)
+            # 1. Ordenar borrar la cookie (CON PROTECCIÓN CONTRA ERRORES)
             try:
                 cookie_manager.delete('dexter_user')
             except KeyError:
-                # Si la cookie no existe en el manager, no hacemos nada y seguimos
-                pass 
+                # Si la cookie no existe, no pasa nada, seguimos con el logout
+                pass
+            except Exception as e:
+                # Cualquier otro error de cookies lo ignoramos para no bloquear la app
+                print(f"Nota: Error menor borrando cookie: {e}")
             
             # 2. Mostrar mensaje para que el usuario sepa que está procesando
             st.sidebar.info("Cerrando sesión...")
             
-            # 3. Limpiar la RAM
+            # 3. Limpiar la RAM (Session State)
             keys_to_clear = ['logged_in', 'username', 'user_role', 'supervisor_id', 'nombre_supervisor', 'alertas_enviadas']
             for key in keys_to_clear:
                 if key in st.session_state:
@@ -259,10 +263,10 @@ def verificar_login():
             
             st.session_state.logged_in = False
             
-            # 4. ¡EL TRUCO! Esperar 2 segundos para dar tiempo al navegador a borrar la cookie
+            # 4. ¡EL TRUCO! Esperar 2 segundos para dar tiempo al navegador a procesar
             time.sleep(2) 
             
-            # 5. Recargar ahora sí
+            # 5. Recargar la página
             st.rerun()
 # --- FIN DEL NUEVO SISTEMA DE LOGIN ---
 
