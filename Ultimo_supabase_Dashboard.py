@@ -127,13 +127,11 @@ def check_password(password_input, hashed_password):
 
 
 # ==============================================================================
-# --- SISTEMA DE LOGIN (DISEÑO ORIGINAL + ARREGLO PANTALLA BLANCA) ---
-# ==============================================================================
-# ==============================================================================
-# --- SISTEMA DE LOGIN (FIX "DOBLE CLICK" PARA SALIR) ---
+# --- SISTEMA DE LOGIN (SOLUCIÓN DEFINITIVA CAMBIO DE USUARIO) ---
 # ==============================================================================
 
-cookie_manager = stx.CookieManager(key="auth_cookies_dexter_v4")
+# Cambiamos la key una última vez para limpiar cualquier caché vieja del componente
+cookie_manager = stx.CookieManager(key="login_manager_v5_final")
 
 def consultar_usuario(username, password_input):
     """Consulta la DB para verificar el login (Hash o Texto)."""
@@ -149,7 +147,7 @@ def consultar_usuario(username, password_input):
                 user_info = dict(user_data._mapping)
                 password_from_db = user_info['password']
                 if check_password(password_input, password_from_db): return user_info
-                # Fallback texto plano
+                # Fallback texto plano y migración
                 if password_input == password_from_db:
                     try:
                         new_hashed = hash_password(password_input)
@@ -173,24 +171,16 @@ def recuperar_usuario_por_nombre(username):
     except: return None
 
 def verificar_login():
-    """Gestión de sesión robusta (Evita el error de tener que clicar 2 veces para salir)."""
+    """Gestión de sesión que permite cambiar de usuario correctamente."""
     
-    # A. Inicializar Estado
-    st.session_state.setdefault('logged_in', False)
-    st.session_state.setdefault('username', None)
-    st.session_state.setdefault('user_role', None)
-    st.session_state.setdefault('supervisor_id', None)
-    st.session_state.setdefault('nombre_supervisor', None)
-    
-    # --- TRUCO PARA EL BOTÓN DE CERRAR SESIÓN ---
-    # Si acabamos de cerrar sesión (flag activada), ignoramos las cookies en esta recarga.
-    ignorar_cookies = False
-    if st.session_state.get('just_logged_out'):
-        ignorar_cookies = True
-        st.session_state['just_logged_out'] = False # Resetear flag para el futuro
+    # 1. Inicializar variables de sesión
+    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    if 'username' not in st.session_state: st.session_state.username = None
+    # Esta variable es la CLAVE: Si es True, ignoramos las cookies hasta nuevo aviso
+    if 'manual_logout' not in st.session_state: st.session_state.manual_logout = False
 
-    # B. INTENTO DE AUTO-LOGIN (Solo si no estamos ignorando cookies por logout reciente)
-    if not st.session_state.logged_in and not ignorar_cookies:
+    # 2. INTENTO DE AUTO-LOGIN (Solo si NO acabamos de cerrar sesión manualmente)
+    if not st.session_state.logged_in and not st.session_state.manual_logout:
         try:
             cookie_user = cookie_manager.get('dexter_user')
             if cookie_user:
@@ -201,61 +191,70 @@ def verificar_login():
                     st.session_state.user_role = user_info.get('role')
                     st.session_state.supervisor_id = user_info.get('supervisor_id')
                     st.session_state.nombre_supervisor = user_info.get('nombre_supervisor')
-                    time.sleep(0.1) 
+                    time.sleep(0.1)
                     st.rerun()
         except: pass
 
-    # C. PANTALLA DE LOGIN
+    # 3. PANTALLA DE LOGIN
     if not st.session_state.logged_in:
         st.title("🔐 Login - Dashboard Trabajos Dexter")
         with st.form("login_form"):
             usuario_input = st.text_input("👤 Usuario", placeholder="Usuario o ID")
             password_input = st.text_input("🔑 Contraseña", type="password")
+            
             if st.form_submit_button("🚀 Iniciar Sesión"):
                 user_info = consultar_usuario(usuario_input, password_input)
+                
                 if user_info:
+                    # A. Login correcto en RAM
                     st.session_state.logged_in = True
                     st.session_state.username = user_info.get('username')
                     st.session_state.user_role = user_info.get('role')
                     st.session_state.supervisor_id = user_info.get('supervisor_id')
                     st.session_state.nombre_supervisor = user_info.get('nombre_supervisor')
-                    # Guardar cookie
-                    cookie_manager.set('dexter_user', user_info.get('username'), key="set_cookie_login")
-                    time.sleep(0.5)
+                    
+                    # B. Desactivamos el bloqueo de cookies porque ya entramos voluntariamente
+                    st.session_state.manual_logout = False 
+                    
+                    # C. Sobrescribimos la cookie vieja con la nueva
+                    cookie_manager.set('dexter_user', user_info.get('username'), key="set_new_cookie")
+                    
+                    st.success(f"¡Bienvenido {user_info.get('username')}!")
+                    time.sleep(1) # Tiempo para que la cookie se guarde bien
                     st.rerun()
                 else:
                     st.error("❌ Credenciales incorrectas")
         return False
         
-    # D. SIDEBAR LOGUEADO
+    # 4. SIDEBAR (Usuario Logueado)
     else:
-        # Nombre bonito
+        # Mostrar nombre bonito
         nombre_base = st.session_state.nombre_supervisor or {
             "admin": "Administración", "gerencia": "Gerencia", "supervisor_old": "Supervisor General"
         }.get(st.session_state.user_role, st.session_state.username)
-        
         sup_id = st.session_state.get('supervisor_id')
         nombre_show = f"{nombre_base} / {sup_id}" if sup_id else nombre_base
         
         st.sidebar.success(f"👤 **{nombre_show}**")
 
-        # --- BOTÓN DE CERRAR SESIÓN CORREGIDO ---
+        # BOTÓN CERRAR SESIÓN
         if st.sidebar.button("🚪 Cerrar Sesión"):
-            # 1. Intentar borrar la cookie del navegador
-            try: cookie_manager.delete('dexter_user', key="del_cookie_out")
+            # 1. Activamos el BLOQUEO para que la cookie vieja no nos meta de nuevo
+            st.session_state.manual_logout = True
+            
+            # 2. Intentamos borrar la cookie
+            try: cookie_manager.delete('dexter_user', key="del_cookie_btn")
             except: pass
             
-            # 2. Limpiar datos de sesión de la RAM
+            # 3. Limpiamos la RAM
             keys = ['logged_in', 'username', 'user_role', 'supervisor_id', 'nombre_supervisor', 'alertas_enviadas']
             for k in keys:
                 if k in st.session_state: del st.session_state[k]
             
             st.session_state.logged_in = False
             
-            # 3. ¡EL FIX! Activar la bandera para ignorar cookies fantasmas en la siguiente recarga
-            st.session_state['just_logged_out'] = True
-            
-            # 4. Recargar inmediatamente
+            # 4. Recargamos
+            time.sleep(0.5)
             st.rerun()
             
         return True
