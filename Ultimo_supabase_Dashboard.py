@@ -129,26 +129,21 @@ def check_password(password_input, hashed_password):
 # --------------------------
 # --- ¡SISTEMA DE LOGIN MODIFICADO! ---
 # --------------------------
+# ==============================================================================
+# --- SISTEMA DE LOGIN Y SESIÓN (SOLUCIÓN PANTALLA BLANCA) ---
+# ==============================================================================
+
+# 1. INICIALIZACIÓN DEL MANAGER (CRÍTICO: La 'key' evita el error de carga infinita)
+cookie_manager = stx.CookieManager(key="cookie_auth_manager_v3")
 
 def consultar_usuario(username, password_input):
-    """
-    Consulta la tabla 'usuarios_dashboard' para verificar el login.
-    Ahora soporta HASH (bcrypt) y fallback a texto plano para migración.
-    """
+    """Verifica credenciales contra la DB (Soporta Hash y Texto Plano)."""
     engine = get_database_engine()
-    if engine is None:
-        st.error("Error de conexión con la base de datos.")
-        return None
-        
+    if engine is None: return None
     try:
         with engine.connect() as conn:
-            # 1. Obtener el usuario SOLO por username
-            query = text("""
-                SELECT username, password, role, supervisor_id, nombre_supervisor 
-                FROM usuarios_dashboard 
-                WHERE username = :user
-            """)
-            
+            # Buscamos el usuario
+            query = text("SELECT username, password, role, supervisor_id, nombre_supervisor FROM usuarios_dashboard WHERE username = :user")
             result = conn.execute(query, {"user": username})
             user_data = result.fetchone()
             
@@ -156,162 +151,121 @@ def consultar_usuario(username, password_input):
                 user_info = dict(user_data._mapping)
                 password_from_db = user_info['password']
                 
-                # 2. Verificar la contraseña en Python
-                
-                # Intenta verificar con bcrypt primero
+                # 1. Verificar Hash (bcrypt)
                 if check_password(password_input, password_from_db):
-                    return user_info # Éxito (Contraseña hasheada)
+                    return user_info
                 
-                # Fallback: Si bcrypt falla, prueba con texto plano (para usuarios viejos)
+                # 2. Fallback: Verificar Texto Plano (y actualizar a Hash si coincide)
                 if password_input == password_from_db:
-                    # ¡IMPORTANTE! Si coincide, actualiza el hash en la DB para el futuro
                     try:
-                        new_hashed_pass = hash_password(password_input)
-                        update_query = text("UPDATE usuarios_dashboard SET password = :pass WHERE username = :user")
-                        conn.execute(update_query, {"pass": new_hashed_pass, "user": username})
+                        new_hashed = hash_password(password_input)
+                        conn.execute(text("UPDATE usuarios_dashboard SET password = :p WHERE username = :u"), {"p": new_hashed, "u": username})
                         conn.commit()
-                    except Exception as e:
-                        st.warning(f"No se pudo actualizar la contraseña de '{username}' a hash: {e}")
-                    
-                    return user_info # Éxito (Contraseña en texto plano)
-                
-                # Si ambos fallan
-                return None
-            else:
-                return None # Usuario no encontrado
-                
+                    except: pass
+                    return user_info
+            return None
     except Exception as e:
-        st.error(f"Error al consultar el usuario: {e}")
+        print(f"Error Login DB: {e}")
         return None
 
-# 1. Configuración del Gestor de Cookies
-
-
-
-
-# Simplemente eliminamos la función y el decorador.
-# Instanciamos el manager directamente.
-
-cookie_manager = stx.CookieManager()
-
-# 2. Función auxiliar: Buscar usuario por nombre (para validar la cookie)
-def consultar_usuario_por_username(username):
-    """Busca un usuario en la BD solo por nombre (sin chequear password)."""
+def recuperar_usuario_por_nombre(username):
+    """
+    Recupera los datos de sesión usando solo la cookie (sin pedir password).
+    Esto permite recargar la página sin que te saque del dashboard.
+    """
     engine = get_database_engine()
     if engine is None: return None
     try:
         with engine.connect() as conn:
             query = text("SELECT username, role, supervisor_id, nombre_supervisor FROM usuarios_dashboard WHERE username = :user")
             result = conn.execute(query, {"user": username})
-            user_data = result.fetchone()
-            if user_data:
-                return dict(user_data._mapping)
-            return None
-    except Exception as e:
-        print(f"Error DB Cookie: {e}")
-        return None
+            data = result.fetchone()
+            return dict(data._mapping) if data else None
+    except: return None
 
-# 3. Función Principal de Login
 def verificar_login():
-    """Maneja el login verificando Session State O Cookies."""
+    """
+    Maneja el inicio de sesión.
+    SOLUCIÓN PANTALLA BLANCA: Usa time.sleep(1) antes de st.rerun() para dar tiempo al navegador.
+    """
     
-    # A. Inicializar variables de sesión si no existen
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.session_state.user_role = None
-        st.session_state.supervisor_id = None
-        st.session_state.nombre_supervisor = None
-
-    # B. Si NO está logueado en RAM, intentar recuperar desde COOKIE
+    # A. Inicializar Session State
+    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    
+    # B. INTENTO DE LOGIN AUTOMÁTICO (COOKIES)
+    # Si no estamos logueados en RAM, miramos si existe la cookie
     if not st.session_state.logged_in:
         try:
-            # Leemos la cookie (puede tardar unos ms)
-            cookie_user = cookie_manager.get(cookie='dexter_user')
-            
+            cookie_user = cookie_manager.get('dexter_user')
             if cookie_user:
-                # Validamos que el usuario de la cookie siga existiendo en la BD
-                user_info = consultar_usuario_por_username(cookie_user)
-                
+                # Validamos que el usuario de la cookie sea real
+                user_info = recuperar_usuario_por_nombre(cookie_user)
                 if user_info:
-                    # ¡Recuperamos la sesión!
                     st.session_state.logged_in = True
                     st.session_state.username = user_info.get('username')
                     st.session_state.user_role = user_info.get('role')
                     st.session_state.supervisor_id = user_info.get('supervisor_id')
                     st.session_state.nombre_supervisor = user_info.get('nombre_supervisor')
-                    st.rerun() # Recargamos para mostrar la app
-        except Exception as e:
-            print(f"Error leyendo cookies: {e}")
-
-    # C. Si sigue sin estar logueado (ni RAM ni Cookie), mostrar FORMULARIO
-    if not st.session_state.logged_in:
-        st.title("🔐 Login - Dashboard Trabajos Dexter")
-        
-        with st.form("login_form"):
-            usuario_input = st.text_input("👤 Usuario", placeholder="Ingresa tu usuario")
-            password_input = st.text_input("🔑 Contraseña", type="password", placeholder="Ingresa tu contraseña")
-            submitted = st.form_submit_button("🚀 Iniciar Sesión")
-            
-            if submitted:
-                # Verificamos contraseña con la función existente 'consultar_usuario'
-                user_info = consultar_usuario(usuario_input, password_input)
-                
-                if user_info:
-                    # Login exitoso en RAM
-                    st.session_state.logged_in = True
-                    st.session_state.username = user_info.get('username')
-                    st.session_state.user_role = user_info.get('role')
-                    st.session_state.supervisor_id = user_info.get('supervisor_id')
-                    st.session_state.nombre_supervisor = user_info.get('nombre_supervisor')
-                    
-                    # --- GUARDAR COOKIE (Persistencia por 7 días) ---
-                    cookie_manager.set('dexter_user', user_info.get('username'), expires_at=datetime.now() + timedelta(days=7))
-                    
-                    st.success("¡Bienvenido! Guardando sesión...")
-                    time.sleep(1) # Espera breve para asegurar que la cookie se escriba
+                    time.sleep(0.2) # Pequeña pausa para sincronizar
                     st.rerun()
-                else:
-                    st.error("❌ Usuario o contraseña incorrectos")
-        
-        return False # Detiene la ejecución del resto de la app
+        except: pass
 
-    # D. Si YA está logueado (Usuario autenticado)
+    # C. FORMULARIO DE LOGIN (Si no hay cookie ni sesión RAM)
+    if not st.session_state.logged_in:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("### 🔐 Iniciar Sesión")
+            with st.form("login_form"):
+                u = st.text_input("👤 Usuario", placeholder="Usuario")
+                p = st.text_input("🔑 Contraseña", type="password")
+                
+                if st.form_submit_button("🚀 Entrar", use_container_width=True):
+                    user_info = consultar_usuario(u, p)
+                    if user_info:
+                        # Guardar en RAM
+                        st.session_state.logged_in = True
+                        st.session_state.username = user_info.get('username')
+                        st.session_state.user_role = user_info.get('role')
+                        st.session_state.supervisor_id = user_info.get('supervisor_id')
+                        st.session_state.nombre_supervisor = user_info.get('nombre_supervisor')
+                        
+                        # Guardar en Cookie
+                        cookie_manager.set('dexter_user', user_info.get('username'), key="set_cookie_login")
+                        
+                        st.success("✅ ¡Bienvenido!")
+                        # IMPORTANTE: Esperar a que la cookie se escriba antes de recargar
+                        time.sleep(1) 
+                        st.rerun()
+                    else:
+                        st.error("❌ Credenciales incorrectas")
+        return False
+
+    # D. INTERFAZ DE USUARIO LOGUEADO (SIDEBAR)
     else:
-        # Mostrar nombre en la barra lateral
-        if st.session_state.nombre_supervisor:
-            nombre_mostrar = st.session_state.nombre_supervisor
-        else:
-            nombre_mostrar = st.session_state.username
-
-        st.sidebar.success(f"👤 **{nombre_mostrar}**")
-
-        # Botón de Cerrar Sesión
-        if st.sidebar.button("🚪 Cerrar Sesión"):
-            # 1. Ordenar borrar la cookie
-            cookie_manager.delete('dexter_user')
+        # Mostrar quién está logueado
+        nombre = st.session_state.get('nombre_supervisor') or st.session_state.get('username')
+        st.sidebar.markdown(f"""
+        <div style='background-color:#d1e7dd;padding:10px;border-radius:5px;text-align:center;color:#0f5132;margin-bottom:10px'>
+            👤 <b>{nombre}</b><br><small>{st.session_state.user_role.upper()}</small>
+        </div>""", unsafe_allow_html=True)
+        
+        # Botón Logout
+        if st.sidebar.button("🚪 Cerrar Sesión", use_container_width=True):
+            st.toast("Cerrando sesión...")
+            try: cookie_manager.delete('dexter_user', key="del_cookie")
+            except: pass
             
-            # 2. Mostrar mensaje para que el usuario sepa que está procesando
-            st.sidebar.info("Cerrando sesión...")
+            # Limpiar RAM
+            for k in ['logged_in', 'username', 'user_role', 'supervisor_id', 'nombre_supervisor', 'alertas_enviadas']:
+                if k in st.session_state: del st.session_state[k]
             
-            # 3. Limpiar la RAM
-            keys_to_clear = ['logged_in', 'username', 'user_role', 'supervisor_id', 'nombre_supervisor', 'alertas_enviadas']
-            for key in keys_to_clear:
-                if key in st.session_state:
-                    del st.session_state[key]
-            
-            st.session_state.logged_in = False
-            
-            # 4. ¡EL TRUCO! Esperar 2 segundos para dar tiempo al navegador a borrar la cookie
-            time.sleep(2) 
-            
-            # 5. Recargar ahora sí
+            # IMPORTANTE: Esperar a que la cookie se borre antes de recargar
+            time.sleep(1)
             st.rerun()
             
-        return True # Permite que el resto de la app se ejecute
-# --- FIN DEL NUEVO SISTEMA DE LOGIN ---
+        return True
 
-
+# --- FRENO DE MANO: Si no hay login, detener ejecución aquí ---
 if not verificar_login():
     st.stop()
 
@@ -2893,6 +2847,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
