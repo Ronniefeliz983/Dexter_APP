@@ -1860,7 +1860,7 @@ def render_dashboard_page(title_prefix, df_page_data, df_full_historial, role, r
         st.subheader("👨‍🔧 Resumen por Técnico")
         if 'Asignado_A' in df_page_data.columns:
             # --- ¡MODIFICADO! Añadido 'df_hc_supervisores' y 'df_hc_tecnicos' ---
-            resumen_tec = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
+            resumen_tec = crear_resumen_admin(df_page_data, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Asignado_A', logica_tecnico=True, es_pyme_page=es_pyme_flag, es_puntualidad_page=es_puntualidad_flag, reabiertos_set=set_casos_reabiertos)
             
             if not resumen_tec.empty:
                 resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
