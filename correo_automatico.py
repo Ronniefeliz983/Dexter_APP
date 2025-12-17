@@ -14,59 +14,63 @@ EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_JEFE = os.getenv("EMAIL_JEFE")
 
-def obtener_reporte_formateado():
-    engine = create_engine(DB_URL)
+def obtener_reporte_completo():
+    if not DB_URL:
+        raise ValueError("DATABASE_URL no encontrada en los Secrets.")
+    
+    # Ajuste de protocolo para SQLAlchemy
+    url = DB_URL.replace("postgres://", "postgresql://", 1) if DB_URL.startswith("postgres://") else DB_URL
+    engine = create_engine(url)
+    
     with engine.connect() as conn:
-        # 1. Traer todo el historial para identificar "Nuevos Hoy"
+        # Seleccionamos TODAS las columnas de la tabla
         query = text("SELECT * FROM historial_cambios")
         df_full = pd.read_sql(query, conn)
         
         if df_full.empty:
             return None
 
-        # 2. Identificar la "Fecha de Nacimiento" del ticket (Lógica de tu Dashboard)
+        # Procesar fechas para identificar "Nuevos Hoy"
         df_full['timestamp_procesado'] = pd.to_datetime(df_full['timestamp_procesado'])
+        
+        # Identificar la primera vez que apareció cada orden (Fecha de Nacimiento)
         df_full['Fecha_Nacimiento'] = df_full.groupby('orden_externa')['timestamp_procesado'].transform('min')
         
-        # 3. Filtrar solo los que nacieron hoy
+        # Filtrar solo los tickets cuyo primer registro fue hoy
         fecha_hoy = datetime.now().date()
         df_nuevos_hoy = df_full[df_full['Fecha_Nacimiento'].dt.date == fecha_hoy].copy()
         
         if df_nuevos_hoy.empty:
             return None
 
-        # 4. Quedarse con el estado MÁS RECIENTE (Lógica obtener_datos_unicos)
+        # Lógica de estado más reciente: Ordenar por tiempo y quitar duplicados
         df_final = df_nuevos_hoy.sort_values('timestamp_procesado', ascending=False)
         df_final = df_final.drop_duplicates(subset=['orden_externa'], keep='first')
         
-        # 5. Seleccionar y renombrar columnas para que se vea limpio como en tu imagen
-        columnas_visibles = {
-            'trabajo': 'Trabajo',
-            'orden_externa': 'OrdenExterna',
-            'cliente': 'Cliente',
-            'vence': 'Vence',
-            'oe_creacion': 'OE_Creacion',
-            'oe_vence': 'OE_Vence',
-            'prioridad': 'Prioridad',
-            'tipo_de_prioridad': 'Tipo_de_prioridad'
-        }
-        return df_final[list(columnas_visibles.keys())].rename(columns=columnas_visibles)
+        # Limpieza de columnas técnicas antes de enviar
+        columnas_a_excluir = ['id', 'fecha_actualizacion', 'fecha_registro', 'Fecha_Nacimiento']
+        df_final = df_final.drop(columns=[c for c in columnas_a_excluir if c in df_final.columns])
+
+        # Opcional: Poner los nombres de las columnas en mayúsculas/formato bonito
+        df_final.columns = [col.replace('_', ' ').title() for col in df_final.columns]
+        
+        return df_final
 
 def enviar_correo():
-    df = obtener_reporte_formateado()
+    df = obtener_reporte_completo()
     if df is None:
-        print("No hay tickets nuevos hoy.")
+        print("No se encontraron tickets nuevos hoy.")
         return
 
-    archivo = f"Reporte_Nuevos_Hoy_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    archivo = f"Reporte_General_{datetime.now().strftime('%Y%m%d')}.xlsx"
     df.to_excel(archivo, index=False)
 
     msg = MIMEMultipart()
-    msg['Subject'] = f"📋 Tabla de Tickets: Nuevos Hoy (Estado Actual) - {datetime.now().strftime('%d/%m/%Y')}"
+    msg['Subject'] = f"📊 Reporte Detallado de Trabajos - {datetime.now().strftime('%d/%m/%Y')}"
     msg['From'] = EMAIL_USER
     msg['To'] = EMAIL_JEFE
 
-    msg.attach(MIMEText(f"Hola,\n\nAdjunto el reporte diario con los tickets nuevos detectados hoy y su estado más reciente procesado hasta las 5:30 PM.", 'plain'))
+    msg.attach(MIMEText(f"Saludos,\n\nSe adjunta el reporte completo con todas las columnas de los tickets nuevos procesados hoy.", 'plain'))
 
     with open(archivo, "rb") as f:
         part = MIMEBase("application", "octet-stream")
@@ -81,7 +85,7 @@ def enviar_correo():
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
         server.quit()
-        print("Reporte enviado al jefe.")
+        print("Reporte enviado exitosamente con todas las columnas.")
     finally:
         if os.path.exists(archivo):
             os.remove(archivo)
