@@ -1,1 +1,30 @@
+name: Enviar Reporte Diario Jefe
+on:
+  schedule:
+    # 21:30 UTC es 5:30 PM AST (República Dominicana)
+    - cron: '30 21 * * *'
+  workflow_dispatch: # Permite probarlo manualmente con un botón
 
+jobs:
+  send_email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Instalar dependencias
+        run: |
+          pip install pandas sqlalchemy psycopg2-binary openpyxl
+
+      - name: Ejecutar Script de Envío
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_JEFE: ${{ secrets.EMAIL_JEFE }}
+        run: python correo_automatico.py
