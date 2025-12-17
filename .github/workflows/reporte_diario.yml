@@ -1,15 +1,17 @@
-name: Envio Reporte Diario 5:30PM
+name: Corte Diario Programado
 
 on:
   schedule:
+    # Envío de las 5:30 PM RD
     - cron: '30 21 * * *'
-  workflow_dispatch:
+    # Envío de las 11:00 PM RD
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Para que puedas probarlo manualmente cuando quieras
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # ESTA ES LA LÍNEA CLAVE QUE DEBES AÑADIR:
-    environment: Dexter  
+    environment: Dexter
 
     steps:
       - name: Checkout del código
