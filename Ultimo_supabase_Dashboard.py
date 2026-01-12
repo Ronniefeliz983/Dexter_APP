@@ -2164,23 +2164,37 @@ def render_admin_crud_page():
 # --------------------------
 # Filtrado por Rol y Sidebar
 # --------------------------
+# --------------------------
+# Filtrado por Rol y Sidebar
+# --------------------------
 df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
 
 st.sidebar.title("📌 Menú")
 
 boton_activar_notificaciones_movil()
-# --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
-# AÑADIDO "🔄 Reabiertos" v2.7.3
-# --- ACTUALIZACIÓN DE MENÚ ---
-menu_options_base = ["🏠 Principal", "🤝 Compromisos Hoy", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"]
 
-# 1. Añadir "Tracking Ticket" para todos EXCEPTO para 'admin'
+# --- DEFINICIÓN DEL ORDEN EXACTO DEL MENÚ ---
+# 1. Definimos la base en el orden que quieres que aparezca
+menu_options_base = [
+    "🏠 Principal", 
+    "🤝 Compromisos Hoy",  # <--- Nueva pestaña aquí
+    "📊 Análisis PYMEs", 
+    "⏰ Puntualidad", 
+    "🎯 Citas Puntuales", 
+    "📅 Antiguas", 
+    "📈 Rendimiento", 
+    "🔄 Reabiertos"
+]
+
+# 2. Insertar "Tracking Ticket" dinámicamente (si no es admin)
+# Al usar el índice 5, lo ponemos después de "Citas Puntuales" 
+# (0=Principal, 1=Compromisos, 2=Pymes, 3=Puntualidad, 4=Citas, 5=AQUÍ VA TRACKING)
 if st.session_state.user_role != "admin":
-    menu_options_base.insert(4, "🔍 Tracking Ticket") # Lo inserta después de "Citas Puntuales"
+    menu_options_base.insert(5, "🔍 Tracking Ticket") 
 
-# 2. Añadir "Admin Usuarios" SÓLO para 'admin' y 'supervisor_old'
+# 3. Añadir "Admin Usuarios" al final (solo admins/jefes)
 if st.session_state.user_role in ["admin", "supervisor_old"]:
-    menu_options_base.append("⚙️ Admin Usuarios") # Lo añade al final
+    menu_options_base.append("⚙️ Admin Usuarios")
     
 menu = st.sidebar.radio("Selecciona una página", menu_options_base)
 # --- FIN DE LA CORRECCIÓN DE MENÚ ---
