@@ -2177,15 +2177,14 @@ boton_activar_notificaciones_movil()
 # 1. Definimos la base en el orden que quieres que aparezca
 menu_options_base = [
     "🏠 Principal", 
-    "🤝 Compromisos Hoy",  # <--- Nueva pestaña aquí
     "📊 Análisis PYMEs", 
     "⏰ Puntualidad", 
     "🎯 Citas Puntuales", 
+    "🤝 Compromisos Hoy",  # <--- AHORA ESTÁ AQUÍ (Después de Citas Puntuales)
     "📅 Antiguas", 
     "📈 Rendimiento", 
     "🔄 Reabiertos"
 ]
-
 # 2. Insertar "Tracking Ticket" dinámicamente (si no es admin)
 # Al usar el índice 5, lo ponemos después de "Citas Puntuales" 
 # (0=Principal, 1=Compromisos, 2=Pymes, 3=Puntualidad, 4=Citas, 5=AQUÍ VA TRACKING)
