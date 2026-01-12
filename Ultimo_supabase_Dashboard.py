@@ -1605,36 +1605,44 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
 
     # Formatea los datos para visualización (fechas, None, etc.)
 # 1. Formateamos los datos completos (esto se usará para el Excel)
+    # 1. Formateamos los datos completos
     df_display_final_formateado = formatear_para_display(df_filtrado_final)
 
-    # --- INICIO CAMBIO: OCULTAR COLUMNAS TÉCNICAS (SOLO VISUAL) ---
-    # Definimos la lista de columnas que NO queremos ver en el dashboard
-    # NOTA: He quitado 'OE_Vencimiento' y 'OE_Vence' para que SÍ se vean.
+    # --- INICIO CAMBIO: LOGICA VISUAL MEJORADA ---
+    
+    # A. Creamos la copia visual
+    df_visual = df_display_final_formateado.copy()
+
+    # B. TRUCO DE RESTAURACIÓN:
+    # Si 'OE_Vencimiento' quedó vacía (None) porque era texto (ej: "Hoy"), 
+    # la rellenamos con el valor original para que NO se vea vacía.
+    if 'OE_Vencimiento' in df_visual.columns and 'OE_Vencimiento_Original' in df_visual.columns:
+        # Reemplazamos los "None" (string o nulo) con el valor de la columna Original
+        df_visual['OE_Vencimiento'] = df_visual['OE_Vencimiento'].replace('None', np.nan).fillna(df_visual['OE_Vencimiento_Original'])
+
+    # C. Definimos las columnas a OCULTAR
+    # Nota: 'OE_Vencimiento' NO está aquí para que se vea.
     cols_tecnicas = [
-        'OE_Vencimiento_Original', # La interna (texto crudo).
+        'OE_Vencimiento_Original', # Ya pasamos su info a la columna principal, así que la ocultamos
         'OE_Creacion', 
         'Prioridad', 
         'Tipo_de_prioridad',
-        'Vence',      # Si prefieres ver 'Vence', bórrala de esta lista
-        'Vence en',   # Cálculo interno de PYMES
-        'Vencido',    # Booleano interno
+        'Vence',      
+        'Vence en',   
+        'Vencido',    
         'Es_PYME_Negocio',
         'Fecha_Nacimiento',
         'lote_procesado'
     ]
 
-    # Creamos una copia 'df_visual' para manipular lo que se ve en pantalla
-    df_visual = df_display_final_formateado.copy()
-
-    # Si NO estamos en la página "pymes", borramos visualmente esas columnas
+    # D. Si NO estamos en pymes, borramos las columnas técnicas
     if page_key != "pymes":
         cols_a_borrar = [c for c in cols_tecnicas if c in df_visual.columns]
         df_visual = df_visual.drop(columns=cols_a_borrar)
     # --- FIN CAMBIO ---
 
-    # 2. Renderizamos la tabla en pantalla usando 'df_visual' (la limpia)
+    # 2. Renderizamos
     if not df_display_final_formateado.empty:
-        # Aplicar el estilo (highlight_reabiertos usa el índice o columnas que aun existan)
         st.dataframe(
             df_visual.style.apply(highlight_reabiertos, axis=1), 
             use_container_width=True, 
