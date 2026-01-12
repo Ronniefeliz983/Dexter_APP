@@ -1606,42 +1606,43 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
     # Formatea los datos para visualización (fechas, None, etc.)
 # 1. Formateamos los datos completos (esto se usará para el Excel)
     # 1. Formateamos los datos completos
+    # 1. Formateamos los datos completos
     df_display_final_formateado = formatear_para_display(df_filtrado_final)
 
-    # --- INICIO CAMBIO: LOGICA VISUAL MEJORADA ---
-    
-    # A. Creamos la copia visual
-    df_visual = df_display_final_formateado.copy()
+    # --- CORRECCIÓN DE DATOS (Arreglar OE_Vencimiento para vista y Excel) ---
+    if 'OE_Vencimiento' in df_display_final_formateado.columns and 'OE_Vencimiento_Original' in df_display_final_formateado.columns:
+        # Rellenamos los vacíos con el texto original (ej: "HOY", "Vencida")
+        df_display_final_formateado['OE_Vencimiento'] = df_display_final_formateado['OE_Vencimiento'].replace('None', np.nan).fillna(df_display_final_formateado['OE_Vencimiento_Original'])
 
-    # B. TRUCO DE RESTAURACIÓN:
-    # Si 'OE_Vencimiento' quedó vacía (None) porque era texto (ej: "Hoy"), 
-    # la rellenamos con el valor original para que NO se vea vacía.
-    if 'OE_Vencimiento' in df_visual.columns and 'OE_Vencimiento_Original' in df_visual.columns:
-        # Reemplazamos los "None" (string o nulo) con el valor de la columna Original
-        df_visual['OE_Vencimiento'] = df_visual['OE_Vencimiento'].replace('None', np.nan).fillna(df_visual['OE_Vencimiento_Original'])
-
-    # C. Definimos las columnas a OCULTAR
-    # Nota: 'OE_Vencimiento' NO está aquí para que se vea.
+    # --- LISTA EXACTA DE COLUMNAS A OMITIR EN PANTALLA ---
     cols_tecnicas = [
-        'OE_Vencimiento_Original', # Ya pasamos su info a la columna principal, así que la ocultamos
-        'OE_Creacion', 
-        'Prioridad', 
-        'Tipo_de_prioridad',
-        'Vence',      
-        'Vence en',   
-        'Vencido',    
+        'Timestamp_Procesado',
+        'Fuente_Paso',
+        'Tipo_Evento',
+        'lote_procesado',
+        'Vence_Original',
+        'OE_Creacion_Original',
+        'OE_Vence_Original',
+        'OE_Vencimiento_Original',
+        'Creado_Original',
+        'Timestamp_Procesado_Original',
+        'PYME',
+        'Vence en',
+        'Vencido',
         'Es_PYME_Negocio',
-        'Fecha_Nacimiento',
-        'lote_procesado'
+        'Fecha_Nacimiento'
     ]
 
-    # D. Si NO estamos en pymes, borramos las columnas técnicas
+    # 2. Creamos la copia visual y borramos esas columnas
+    df_visual = df_display_final_formateado.copy()
+
+    # Solo las borramos si NO estamos en la pestaña de PYMES
+    # (Porque en Pymes sí necesitas ver 'Vence en' y 'Vencido')
     if page_key != "pymes":
         cols_a_borrar = [c for c in cols_tecnicas if c in df_visual.columns]
         df_visual = df_visual.drop(columns=cols_a_borrar)
-    # --- FIN CAMBIO ---
 
-    # 2. Renderizamos
+    # 3. Renderizamos la tabla limpia
     if not df_display_final_formateado.empty:
         st.dataframe(
             df_visual.style.apply(highlight_reabiertos, axis=1), 
@@ -1650,22 +1651,18 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
         )
     else:
         st.dataframe(df_visual, use_container_width=True, hide_index=True)
-    # --- INICIO CAMBIO v2.7.7: Lógica dinámica de descarga ---
-    
-    # 1. Determinar qué dataframe y nombre de archivo usar
+
+    # 4. Preparamos la descarga (Usamos el DF con el arreglo de fechas, pero con todas las columnas)
     if filtro_reabiertos:
-        # Si el filtro está activado, descargar solo los reabiertos (df_filtrado_final)
-        # Usamos df_filtrado_final (antes de formatear) para el excel
-        df_para_descargar = df_filtrado_final 
+        df_para_descargar = df_display_final_formateado 
         label_descarga = "📥 Descargar Reabiertos Filtrados (Excel)"
         nombre_archivo = f"{file_name_prefix}_REABIERTOS_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx"
         
     else:
-        # Si el filtro está desactivado, descargar la vista completa (df_display_original)
-        df_para_descargar = df_display_original
+        df_para_descargar = df_display_final_formateado
         label_descarga = "📥 Descargar Detalle (Vista Completa) como Excel"
         nombre_archivo = f"{file_name_prefix}_{global_supervisor_sel}_{datetime.now().strftime('%Y%m%d')}.xlsx"
-
+        
     # 2. Generar y mostrar el botón de descarga
     # Solo mostrar el botón si el dataframe a descargar (sea cual sea) no está vacío
     if not df_para_descargar.empty:
