@@ -2171,7 +2171,8 @@ st.sidebar.title("📌 Menú")
 boton_activar_notificaciones_movil()
 # --- ¡INICIO DE LA CORRECCIÓN DE MENÚ! ---
 # AÑADIDO "🔄 Reabiertos" v2.7.3
-menu_options_base = ["🏠 Principal", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"] 
+# --- ACTUALIZACIÓN DE MENÚ ---
+menu_options_base = ["🏠 Principal", "🤝 Compromisos Hoy", "📊 Análisis PYMEs", "⏰ Puntualidad", "🎯 Citas Puntuales", "📅 Antiguas", "📈 Rendimiento", "🔄 Reabiertos"]
 
 # 1. Añadir "Tracking Ticket" para todos EXCEPTO para 'admin'
 if st.session_state.user_role != "admin":
@@ -2468,6 +2469,73 @@ elif menu == "🎯 Citas Puntuales":
         df_hc_supervisores=df_hc_supervisores, # <-- CORREGIDO
         df_hc_tecnicos=df_hc_tecnicos,        # <-- AÑADIDO
         reabiertos_set=set_casos_reabiertos
+    )
+
+elif menu == "🤝 Compromisos Hoy":
+    st.title(f"🤝 Compromisos del Día - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
+    st.info("Esta pestaña unifica **Puntualidad General** (sin citados) y **Citas Puntuales**.")
+    
+    hoy = pd.Timestamp.now().normalize()
+    
+    # --- LOGICA 1: OBTENER PUNTUALES (Sin los citados/calendarizados) ---
+    df_puntuales_base = pd.DataFrame()
+    if df_unicos is not None and not df_unicos.empty:
+        if 'OE_Vencimiento' in df_unicos.columns:
+            mask_fecha = df_unicos['OE_Vencimiento'].dt.normalize() == hoy
+            oe_venc_orig_str = df_unicos.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str)
+            mask_texto = oe_venc_orig_str.str.lower() == 'hoy'
+            df_p = df_unicos[mask_fecha | mask_texto].copy()
+            
+            # Aplicamos la restricción: Excluimos los que ya se movieron a calendarización
+            estados_citados = ['pendiente de calendarizacion', 'calendarizado']
+            if not df_p.empty:
+                df_puntuales_base = df_p[~df_p['Estado'].astype(str).str.lower().isin(estados_citados)]
+
+    # --- LOGICA 2: OBTENER CITAS PUNTUALES (Lógica original completa) ---
+    df_citas_final = pd.DataFrame()
+    required_cols_citas = ['Prioridad', 'Vence', 'Estado', 'OrdenExterna']
+    if df_unicos is not None and not df_unicos.empty and all(col in df_unicos.columns for col in required_cols_citas):
+        # A. Citas actuales en df_unicos
+        df_citas_base = df_unicos.dropna(subset=['Vence']).copy()
+        mask_prioridad = df_citas_base['Prioridad'].astype(str) == '100'
+        mask_vencimiento_orig = df_citas_base.get('OE_Vencimiento_Original', pd.Series(dtype=str)).astype(str).str.lower() == 'vencida'
+        mask_vence_hoy = df_citas_base['Vence'].dt.normalize() == hoy
+        df_c_actuales = df_citas_base[mask_prioridad & mask_vencimiento_orig & mask_vence_hoy]
+        
+        # B. Citas que ya se gestionaron (buscando en historial)
+        estados_gestionados = ['pendiente de calendarizacion', 'calendarizado']
+        candidatos = df_unicos[df_unicos['Estado'].astype(str).isin(estados_gestionados)]['OrdenExterna'].unique()
+        tickets_gestionados_ids = set()
+        if len(candidatos) > 0 and df_full_historial is not None:
+            hist_cand = df_full_historial[df_full_historial['OrdenExterna'].isin(candidatos)].copy()
+            hist_cand['Vence'] = pd.to_datetime(hist_cand['Vence'], errors='coerce')
+            cumplen = hist_cand[
+                (hist_cand['Prioridad'].astype(str) == '100') & 
+                (hist_cand['OE_Vencimiento_Original'].astype(str).str.lower() == 'vencida') &
+                (hist_cand['Vence'].dt.normalize() == hoy)
+            ]
+            tickets_gestionados_ids.update(cumplen['OrdenExterna'].unique())
+        
+        df_c_historicas = df_unicos[df_unicos['OrdenExterna'].isin(tickets_gestionados_ids)]
+        df_citas_final = pd.concat([df_c_actuales, df_c_historicas]).drop_duplicates(subset=['OrdenExterna'])
+
+    # --- COMBINACIÓN FINAL ---
+    df_compromisos = pd.concat([df_puntuales_base, df_citas_final]).drop_duplicates(subset=['OrdenExterna'])
+
+    # Renderizado usando la función estándar del dashboard
+    render_dashboard_page(
+        title_prefix="Compromisos Hoy", 
+        df_page_data=df_compromisos, 
+        df_full_historial=df_full_historial,
+        role=st.session_state.user_role, 
+        role_supervisor_id=st.session_state.supervisor_id,
+        global_supervisor_sel=supervisor_sel, 
+        status_filter=estatus_sel, 
+        page_key="compromisos",
+        reabiertos_set=set_casos_reabiertos,
+        df_hc_supervisores=df_hc_supervisores,
+        df_hc_tecnicos=df_hc_tecnicos,
+        critical_metric_key='Pendientes'
     )
 
 elif menu == "🔍 Tracking Ticket":
@@ -2834,6 +2902,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
