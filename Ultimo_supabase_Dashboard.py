@@ -1604,19 +1604,44 @@ def display_detail_table(df_data_unicos_hoy, df_full_historial, role, role_super
             return [''] * len(row)
 
     # Formatea los datos para visualización (fechas, None, etc.)
+# 1. Formateamos los datos completos (esto se usará para el Excel)
     df_display_final_formateado = formatear_para_display(df_filtrado_final)
 
+    # --- INICIO CAMBIO: OCULTAR COLUMNAS TÉCNICAS (SOLO VISUAL) ---
+    # Definimos la lista de columnas que NO queremos ver en el dashboard
+    # NOTA: He quitado 'OE_Vencimiento' y 'OE_Vence' para que SÍ se vean.
+    cols_tecnicas = [
+        'OE_Vencimiento_Original', # La interna (texto crudo).
+        'OE_Creacion', 
+        'Prioridad', 
+        'Tipo_de_prioridad',
+        'Vence',      # Si prefieres ver 'Vence', bórrala de esta lista
+        'Vence en',   # Cálculo interno de PYMES
+        'Vencido',    # Booleano interno
+        'Es_PYME_Negocio',
+        'Fecha_Nacimiento',
+        'lote_procesado'
+    ]
+
+    # Creamos una copia 'df_visual' para manipular lo que se ve en pantalla
+    df_visual = df_display_final_formateado.copy()
+
+    # Si NO estamos en la página "pymes", borramos visualmente esas columnas
+    if page_key != "pymes":
+        cols_a_borrar = [c for c in cols_tecnicas if c in df_visual.columns]
+        df_visual = df_visual.drop(columns=cols_a_borrar)
+    # --- FIN CAMBIO ---
+
+    # 2. Renderizamos la tabla en pantalla usando 'df_visual' (la limpia)
     if not df_display_final_formateado.empty:
-        # Aplicar el estilo
+        # Aplicar el estilo (highlight_reabiertos usa el índice o columnas que aun existan)
         st.dataframe(
-            df_display_final_formateado.style.apply(highlight_reabiertos, axis=1), 
+            df_visual.style.apply(highlight_reabiertos, axis=1), 
             use_container_width=True, 
             hide_index=True
         )
     else:
-        # Mostrar un dataframe vacío si no hay resultados
-        st.dataframe(df_display_final_formateado, use_container_width=True, hide_index=True)
-
+        st.dataframe(df_visual, use_container_width=True, hide_index=True)
     # --- INICIO CAMBIO v2.7.7: Lógica dinámica de descarga ---
     
     # 1. Determinar qué dataframe y nombre de archivo usar
@@ -2915,6 +2940,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
