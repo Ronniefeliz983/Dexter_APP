@@ -2230,14 +2230,14 @@ menu = st.sidebar.radio("Selecciona una página", menu_options_base)
 
 st.sidebar.markdown("---")
 
-# --- ¡CAMBIO 3! Botón movido arriba de "Filtros" y sin separador ---
-if st.session_state.user_role == "supervisor_old":
-    if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
-        # Limpia la caché de TODAS las funciones @st.cache_data
-        st.cache_data.clear()   
-        # Vuelve a ejecutar el script inmediatamente
-        st.rerun()
-# --- FIN DEL BLOQUE MOVIDO ---
+# --- ¡CAMBIO SOLICITADO! Botón visible para TODOS los roles ---
+# Eliminamos el 'if st.session_state.user_role == ...' para que todos lo vean
+if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
+    # Limpia la caché de TODAS las funciones @st.cache_data para traer datos frescos de la DB
+    st.cache_data.clear()    
+    # Vuelve a ejecutar el script inmediatamente para reflejar los cambios
+    st.rerun()
+# --- FIN DEL BOTÓN DE REFRESCO ---
 
 st.sidebar.subheader("Filtros")
 
@@ -2945,6 +2945,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
