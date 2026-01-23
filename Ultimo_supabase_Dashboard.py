@@ -2605,117 +2605,141 @@ elif menu == "🤝 Compromisos Hoy":
     )
 
 elif menu == "🤝 Tickets Kenny":
-    st.title(f"🤝 Compromisos de Kenny (Puntuales) - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
-    st.info("Mostrando el **estado actual** de los tickets cargados en la tabla 'Puntuales'.")
+    st.title(f"🤝 Compromisos de Kenny (Puntuales)")
+    
+    # --- SECCIÓN A: CARGA DE DATOS (INGESTA) ---
+    with st.expander("➕ Cargar Nuevos Compromisos (Pegar desde Excel)"):
+        c_load1, c_load2 = st.columns([2, 1])
+        with c_load1:
+            st.info("Pega la columna de órdenes. Se guardarán solo las **nuevas** del día.")
+            if st.button("📋 Pegar y Guardar (Solo Nuevas)", use_container_width=True):
+                try:
+                    import pyperclip
+                    texto = pyperclip.paste()
+                    if texto and not texto.isspace():
+                        # 1. Limpieza
+                        lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+                        ids_pegados = [l for l in lineas if l.isdigit() and len(l) > 4]
+                        
+                        if ids_pegados:
+                            engine = get_database_engine()
+                            with engine.begin() as conn:
+                                # 2. Obtener existentes para comparar
+                                existentes = pd.read_sql("SELECT orden_externa FROM puntuales", conn)
+                                set_existentes = set(existentes['orden_externa'].astype(str).str.strip()) if not existentes.empty else set()
+                                
+                                # 3. Filtrar nuevas
+                                ids_nuevos = [x for x in ids_pegados if x not in set_existentes]
+                                omitidos = len(ids_pegados) - len(ids_nuevos)
+                                
+                                # 4. Guardar
+                                if ids_nuevos:
+                                    df_new = pd.DataFrame({'orden_externa': ids_nuevos})
+                                    df_new.to_sql('puntuales', conn, if_exists='append', index=False)
+                                    st.success(f"✅ Se guardaron **{len(ids_nuevos)}** órdenes nuevas.")
+                                    if omitidos > 0: st.warning(f"👀 Se omitieron **{omitidos}** repetidas.")
+                                    st.cache_data.clear() # Limpiar caché para ver cambios
+                                    time.sleep(1.5)
+                                    st.rerun()
+                                else:
+                                    st.warning(f"⚠️ Las {omitidos} órdenes pegadas ya existen en la lista.")
+                        else:
+                            st.error("No se detectaron números de orden válidos.")
+                    else:
+                        st.error("El portapapeles está vacío.")
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
 
-    # 1. Verificar si hay datos
-    if df_puntuales_raw is None or df_puntuales_raw.empty:
-        st.warning("⚠️ La tabla de 'Puntuales' en Supabase está vacía.")
+        with c_load2:
+            st.write("") # Espacio
+            st.write("")
+            if st.button("🗑️ Borrar Lista", type="primary", use_container_width=True):
+                try:
+                    engine = get_database_engine()
+                    with engine.begin() as conn:
+                        conn.execute(text("TRUNCATE TABLE puntuales"))
+                    st.success("Lista vaciada.")
+                    st.cache_data.clear()
+                    st.rerun()
+                except: pass
+
+    st.markdown("---")
+
+    # --- SECCIÓN B: VISUALIZACIÓN Y FILTROS ---
+    
+    # 1. Cargar datos
+    df_puntuales = cargar_datos_puntuales()
+    
+    if df_puntuales.empty:
+        st.info("📌 No hay compromisos cargados en la lista de 'Puntuales'. Usa el desplegable de arriba para cargar.")
     elif df_full_historial is None or df_full_historial.empty:
-        st.warning("⚠️ No hay historial de tickets para cruzar información.")
+        st.warning("⚠️ No hay historial de tickets para cruzar.")
     else:
-        # 2. MATCH / JOIN: Filtrar el historial basado en los IDs de Puntuales
+        # 2. MATCH (JOIN): Filtrar el historial con la lista de Kenny
+        df_estado_actual = obtener_datos_unicos(df_full_historial)
+        ids_kenny = set(df_puntuales['orden_externa'].unique())
         
-        # A. Obtener el estado MÁS RECIENTE de todos los tickets en la BD
-        df_estado_actual_todos = obtener_datos_unicos(df_full_historial)
+        # Base de datos filtrada (Todos los tickets de Kenny)
+        df_kenny_base = df_estado_actual[df_estado_actual['OrdenExterna'].isin(ids_kenny)].copy()
         
-        # B. Crear lista de IDs a buscar
-        ids_compromisos = set(df_puntuales_raw['orden_externa'].unique())
+        # 3. FILTROS DE USUARIO (Supervisor y Técnico)
+        df_kenny_filtrado = df_kenny_base.copy()
         
-        # C. Filtrar Base: Quedarnos solo con los que están en la lista de Kenny
-        df_kenny_base = df_estado_actual_todos[
-            df_estado_actual_todos['OrdenExterna'].isin(ids_compromisos)
-        ].copy()
-
-        # --- APLICACIÓN DEL FILTRO DE SUPERVISOR ---
-        df_kenny = df_kenny_base.copy()
-        
-        # Caso 1: Si es Supervisor, filtra por SU ID
+        # A. Filtro Supervisor (Sidebar)
         if st.session_state.user_role == "supervisor":
-            if 'Supervisor' in df_kenny.columns:
-                df_kenny = df_kenny[df_kenny['Supervisor'].astype(str).str.strip() == str(st.session_state.supervisor_id).strip()]
-        
-        # Caso 2: Si es Admin/Gerencia y seleccionó un supervisor específico
+            if 'Supervisor' in df_kenny_filtrado.columns:
+                df_kenny_filtrado = df_kenny_filtrado[df_kenny_filtrado['Supervisor'].astype(str).str.strip() == str(st.session_state.supervisor_id).strip()]
         elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
-            if 'Supervisor' in df_kenny.columns:
-                df_kenny = df_kenny[df_kenny['Supervisor'].astype(str).str.strip() == str(supervisor_sel).strip()]
-        # ---------------------------------------------------------------------------
+            if 'Supervisor' in df_kenny_filtrado.columns:
+                df_kenny_filtrado = df_kenny_filtrado[df_kenny_filtrado['Supervisor'].astype(str).str.strip() == str(supervisor_sel).strip()]
 
-        # 3. Mostrar KPIs y Tablas
-        if not df_kenny.empty:
-            # KPIs
-            kpis_kenny = calcular_kpis(df_kenny, df_full_historial)
-            display_kpi_metrics(kpis_kenny, page_key="kenny", critical_metric_key='Pendientes', critical_delta_text="Pendientes")
-            
-            st.markdown("---")
-            
-            # --- 1. RESUMEN POR SUPERVISOR ---
-            st.subheader("👥 Asignación por Supervisor")
-            resumen_kenny = crear_resumen_admin(
-                df_kenny, df_hc_supervisores, df_hc_tecnicos, 
-                agrupar_por='Supervisor', 
-                reabiertos_set=set_casos_reabiertos
-            )
-            st.dataframe(
-                resumen_kenny.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
-                use_container_width=True, hide_index=True
-            )
-
-            # --- 2. RESUMEN POR TÉCNICO (NUEVO) ---
-            st.markdown("---")
-            st.subheader("👨‍🔧 Resumen por Técnico")
-            if 'Asignado_A' in df_kenny.columns:
-                resumen_tec_kenny = crear_resumen_admin(
-                    df_kenny, 
-                    df_hc_supervisores, 
-                    df_hc_tecnicos, 
-                    agrupar_por='Asignado_A', 
-                    logica_tecnico=True, 
-                    reabiertos_set=set_casos_reabiertos
-                )
+        # B. Filtro Técnico (Local en la página)
+        if not df_kenny_filtrado.empty and 'Asignado_A' in df_kenny_filtrado.columns:
+            tecnicos_disponibles = sorted([str(t) for t in df_kenny_filtrado['Asignado_A'].dropna().unique() if str(t).strip()])
+            if tecnicos_disponibles:
+                col_tec, _ = st.columns([1, 2])
+                with col_tec:
+                    tecnico_sel = st.selectbox("👨‍🔧 Filtrar por Técnico:", ["Todos"] + tecnicos_disponibles, key="filtro_tec_kenny")
                 
-                if not resumen_tec_kenny.empty:
-                    # Corrección de nombre de columna si es necesario
-                    resumen_tec_kenny.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
-                    
-                    st.dataframe(
-                        resumen_tec_kenny.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
-                        use_container_width=True, 
-                        hide_index=True
-                    )
-            else:
-                st.info("No hay información de técnicos disponible para mostrar.")
+                if tecnico_sel != "Todos":
+                    df_kenny_filtrado = df_kenny_filtrado[df_kenny_filtrado['Asignado_A'].astype(str).str.strip() == str(tecnico_sel).strip()]
 
+        # 4. MOSTRAR RESULTADOS
+        if not df_kenny_filtrado.empty:
+            # KPIs
+            kpis = calcular_kpis(df_kenny_filtrado, df_full_historial)
+            display_kpi_metrics(kpis, "kenny", 'Pendientes', "Pendientes")
+            
             st.markdown("---")
-            st.subheader("📋 Detalle de los Compromisos")
             
-            # Tabla detallada
+            # Resumen Supervisor (Solo si no se filtró un técnico específico o si hay multiples)
+            if 'Supervisor' in df_kenny_filtrado.columns:
+                st.subheader("👥 Resumen Supervisor")
+                resumen_sup = crear_resumen_admin(df_kenny_filtrado, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', reabiertos_set=set_casos_reabiertos)
+                st.dataframe(resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), use_container_width=True, hide_index=True)
+
+            # Resumen Técnico
+            st.markdown("---")
+            st.subheader("👨‍🔧 Resumen Técnico")
+            if 'Asignado_A' in df_kenny_filtrado.columns:
+                resumen_tec = crear_resumen_admin(df_kenny_filtrado, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Asignado_A', logica_tecnico=True, reabiertos_set=set_casos_reabiertos)
+                if not resumen_tec.empty:
+                    resumen_tec.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True)
+                    st.dataframe(resumen_tec.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), use_container_width=True, hide_index=True)
+
+            # Tabla Detalle
+            st.markdown("---")
+            st.subheader(f"📋 Detalle ({len(df_kenny_filtrado)} tickets)")
             display_detail_table(
-                df_data_unicos_hoy=df_kenny, 
-                df_full_historial=df_full_historial,
-                role=st.session_state.user_role, 
-                role_supervisor_id=st.session_state.supervisor_id,
-                global_supervisor_sel=supervisor_sel, 
-                status_filter=estatus_sel, 
-                page_key="kenny_detail", 
-                file_name_prefix="Tickets_Kenny", 
-                reabiertos_set=set_casos_reabiertos
+                df_kenny_filtrado, df_full_historial, 
+                st.session_state.user_role, st.session_state.supervisor_id, 
+                supervisor_sel, estatus_sel, "kenny_detail", "Tickets_Kenny", set_casos_reabiertos
             )
-            
-            # Validación
-            encontrados_filtrados = len(df_kenny)
-            total_buscados = len(ids_compromisos)
-            
-            if encontrados_filtrados < total_buscados:
-                if supervisor_sel != "Todos" or st.session_state.user_role == "supervisor":
-                    st.info(f"ℹ️ De los {total_buscados} tickets cargados, **{encontrados_filtrados}** coinciden con tu filtro.")
-                else:
-                    st.warning(f"⚠️ Ojo: Cargaste {total_buscados} órdenes, pero solo se encontraron {encontrados_filtrados} en KUNAI.")
         else:
             if not df_kenny_base.empty:
-                st.info(f"ℹ️ Hay tickets de Kenny ({len(df_kenny_base)}), pero **ninguno pertenece al supervisor seleccionado**.")
+                st.info(f"ℹ️ Hay {len(df_kenny_base)} tickets cargados, pero ninguno coincide con tus filtros (Supervisor/Técnico).")
             else:
-                st.warning("❌ Ninguna de las órdenes cargadas en 'Puntuales' aparece en el historial de KUNAI.")
+                st.warning("❌ Ninguno de los tickets cargados en 'Puntuales' aparece en la base de datos KUNAI.")
 
 elif menu == "🔍 Tracking Ticket":
     st.title(f"🔍 Tracking de Tickets - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
