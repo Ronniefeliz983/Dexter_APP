@@ -921,6 +921,28 @@ def cargar_datos_reabiertos(_last_update_ts=None): # <-- Acepta el trigger
 # --- FIN DE LA NUEVA FUNCIÓN ---
 # --- FIN DEL CAMBIO 4 ---
 
+# --- NUEVA FUNCIÓN PARA CARGAR PUNTUALES (COMPROMISOS) ---
+@st.cache_data(ttl=60) # Cache corto para que se actualice rápido al subir datos
+def cargar_datos_puntuales():
+    """Carga la tabla 'puntuales' de Supabase."""
+    engine = get_database_engine()
+    if engine is None: return pd.DataFrame()
+    try:
+        # Seleccionamos solo la columna necesaria
+        query = text("SELECT orden_externa FROM puntuales")
+        with engine.connect() as conn:
+            df_sql = pd.read_sql(query, conn)
+        
+        if not df_sql.empty and 'orden_externa' in df_sql.columns:
+            # Normalizamos a string y quitamos espacios
+            df_sql['orden_externa'] = df_sql['orden_externa'].astype(str).str.strip()
+            
+        return df_sql
+    except Exception as e:
+        st.error(f"Error cargando puntuales: {e}")
+        return pd.DataFrame()
+    
+
 # --- ¡NUEVO! FUNCIÓN PARA CARGAR NOMBRES DE SUPERVISOR ---
 @st.cache_data(ttl=3600) # Cache de 1 hora, los nombres no cambian mucho
 def cargar_head_count_supervisor():
@@ -1015,7 +1037,7 @@ last_db_update = get_last_update_timestamp()
 df_full_historial, last_update_time = cargar_datos(_last_update_ts=last_db_update)
 df_reabiertos_full = cargar_datos_reabiertos(_last_update_ts=last_db_update)
 # --- FIN DEL CAMBIO 5 ---
-
+df_puntuales_raw = cargar_datos_puntuales()
 
 df_hc_supervisores = cargar_head_count_supervisor() # <-- Renombrado (antes df_head_count)
 df_hc_tecnicos = cargar_head_count_tecnico() # <-- NUEVA LÍNEA v2.7.3
@@ -2210,7 +2232,8 @@ menu_options_base = [
     "📊 Análisis PYMEs", 
     "⏰ Puntualidad", 
     "🎯 Citas Puntuales", 
-    "🤝 Compromisos Hoy",  # <--- AHORA ESTÁ AQUÍ (Después de Citas Puntuales)
+    "🤝 Compromisos Hoy",
+    "🤝 Tickets Kenny",  # <--- AHORA ESTÁ AQUÍ (Después de Citas Puntuales)
     "📅 Antiguas", 
     "📈 Rendimiento", 
     "🔄 Reabiertos"
@@ -2581,6 +2604,77 @@ elif menu == "🤝 Compromisos Hoy":
         critical_metric_key='Pendientes'
     )
 
+elif menu == "🤝 Tickets Kenny":
+    st.title(f"🤝 Compromisos de Kenny (Puntuales)")
+    st.info("Mostrando el **estado actual** de los tickets cargados en la tabla 'Puntuales'.")
+
+    # 1. Verificar si hay datos
+    if df_puntuales_raw is None or df_puntuales_raw.empty:
+        st.warning("⚠️ La tabla de 'Puntuales' en Supabase está vacía.")
+    elif df_full_historial is None or df_full_historial.empty:
+        st.warning("⚠️ No hay historial de tickets para cruzar información.")
+    else:
+        # 2. MATCH / JOIN: Filtrar el historial basado en los IDs de Puntuales
+        
+        # A. Obtener el estado MÁS RECIENTE de todos los tickets en la BD
+        # (Usamos tu función existente 'obtener_datos_unicos' que ya ordena por fecha)
+        df_estado_actual_todos = obtener_datos_unicos(df_full_historial)
+        
+        # B. Crear lista de IDs a buscar
+        ids_compromisos = set(df_puntuales_raw['orden_externa'].unique())
+        
+        # C. Filtrar: Quedarnos solo con los que están en la lista de Kenny
+        df_kenny = df_estado_actual_todos[
+            df_estado_actual_todos['OrdenExterna'].isin(ids_compromisos)
+        ].copy()
+
+        # 3. Mostrar KPIs y Tablas
+        if not df_kenny.empty:
+            # Calcular métricas específicas para este grupo
+            kpis_kenny = calcular_kpis(df_kenny, df_full_historial)
+            
+            # Mostramos las métricas usando tu función de renderizado
+            # Usamos 'Pendientes' como métrica crítica
+            display_kpi_metrics(kpis_kenny, page_key="kenny", critical_metric_key='Pendientes', critical_delta_text="Pendientes")
+            
+            st.markdown("---")
+            
+            # Resumen por Supervisor (para ver quién tiene los compromisos)
+            st.subheader("👥 Asignación por Supervisor")
+            resumen_kenny = crear_resumen_admin(
+                df_kenny, df_hc_supervisores, df_hc_tecnicos, 
+                agrupar_por='Supervisor', 
+                reabiertos_set=set_casos_reabiertos
+            )
+            st.dataframe(
+                resumen_kenny.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
+                use_container_width=True, hide_index=True
+            )
+
+            st.markdown("---")
+            st.subheader("📋 Detalle de los Compromisos")
+            
+            # Usamos tu función de tabla detallada (con buscador y descarga)
+            display_detail_table(
+                df_data_unicos_hoy=df_kenny, 
+                df_full_historial=df_full_historial,
+                role=st.session_state.user_role, 
+                role_supervisor_id=st.session_state.supervisor_id,
+                global_supervisor_sel=supervisor_sel, 
+                status_filter=estatus_sel, 
+                page_key="kenny_detail", 
+                file_name_prefix="Tickets_Kenny", 
+                reabiertos_set=set_casos_reabiertos
+            )
+            
+            # Validación: ¿Faltan tickets? (Están en puntuales pero no en el historial)
+            encontrados = len(df_kenny)
+            total_buscados = len(ids_compromisos)
+            if encontrados < total_buscados:
+                st.warning(f"⚠️ Ojo: Cargaste {total_buscados} órdenes en 'Puntuales', pero solo se encontraron {encontrados} en la base de datos KUNAI.")
+        else:
+            st.warning("❌ Ninguna de las órdenes cargadas en 'Puntuales' aparece en el historial de KUNAI.")
+            
 elif menu == "🔍 Tracking Ticket":
     st.title(f"🔍 Tracking de Tickets - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Esta página busca en **todo el historial** de la base de datos, no solo en los tickets de hoy.")
@@ -2945,6 +3039,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
