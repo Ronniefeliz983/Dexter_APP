@@ -2605,7 +2605,7 @@ elif menu == "🤝 Compromisos Hoy":
     )
 
 elif menu == "🤝 Tickets Kenny":
-    st.title(f"🤝 Compromisos de Kenny (Puntuales)")
+    st.title(f"🤝 Compromisos de Kenny (Puntuales) - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Mostrando el **estado actual** de los tickets cargados en la tabla 'Puntuales'.")
 
     # 1. Verificar si hay datos
@@ -2617,29 +2617,41 @@ elif menu == "🤝 Tickets Kenny":
         # 2. MATCH / JOIN: Filtrar el historial basado en los IDs de Puntuales
         
         # A. Obtener el estado MÁS RECIENTE de todos los tickets en la BD
-        # (Usamos tu función existente 'obtener_datos_unicos' que ya ordena por fecha)
         df_estado_actual_todos = obtener_datos_unicos(df_full_historial)
         
         # B. Crear lista de IDs a buscar
         ids_compromisos = set(df_puntuales_raw['orden_externa'].unique())
         
-        # C. Filtrar: Quedarnos solo con los que están en la lista de Kenny
-        df_kenny = df_estado_actual_todos[
+        # C. Filtrar Base: Quedarnos solo con los que están en la lista de Kenny
+        df_kenny_base = df_estado_actual_todos[
             df_estado_actual_todos['OrdenExterna'].isin(ids_compromisos)
         ].copy()
 
-        # 3. Mostrar KPIs y Tablas
+        # --- APLICACIÓN DEL FILTRO DE SUPERVISOR (IGUAL QUE LAS DEMÁS PESTAÑAS) ---
+        df_kenny = df_kenny_base.copy()
+        
+        # Caso 1: Si es Supervisor, filtra por SU ID
+        if st.session_state.user_role == "supervisor":
+            if 'Supervisor' in df_kenny.columns:
+                df_kenny = df_kenny[df_kenny['Supervisor'].astype(str).str.strip() == str(st.session_state.supervisor_id).strip()]
+        
+        # Caso 2: Si es Admin/Gerencia y seleccionó un supervisor específico en el sidebar
+        elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
+            if 'Supervisor' in df_kenny.columns:
+                df_kenny = df_kenny[df_kenny['Supervisor'].astype(str).str.strip() == str(supervisor_sel).strip()]
+        # ---------------------------------------------------------------------------
+
+        # 3. Mostrar KPIs y Tablas (Usando df_kenny ya filtrado)
         if not df_kenny.empty:
-            # Calcular métricas específicas para este grupo
+            # Calcular métricas específicas para este grupo filtrado
             kpis_kenny = calcular_kpis(df_kenny, df_full_historial)
             
-            # Mostramos las métricas usando tu función de renderizado
-            # Usamos 'Pendientes' como métrica crítica
+            # Mostramos las métricas
             display_kpi_metrics(kpis_kenny, page_key="kenny", critical_metric_key='Pendientes', critical_delta_text="Pendientes")
             
             st.markdown("---")
             
-            # Resumen por Supervisor (para ver quién tiene los compromisos)
+            # Resumen por Supervisor (Si es admin y ve Todos, esto es útil. Si es supervisor, solo saldrá él)
             st.subheader("👥 Asignación por Supervisor")
             resumen_kenny = crear_resumen_admin(
                 df_kenny, df_hc_supervisores, df_hc_tecnicos, 
@@ -2654,7 +2666,7 @@ elif menu == "🤝 Tickets Kenny":
             st.markdown("---")
             st.subheader("📋 Detalle de los Compromisos")
             
-            # Usamos tu función de tabla detallada (con buscador y descarga)
+            # Tabla detallada
             display_detail_table(
                 df_data_unicos_hoy=df_kenny, 
                 df_full_historial=df_full_historial,
@@ -2667,14 +2679,22 @@ elif menu == "🤝 Tickets Kenny":
                 reabiertos_set=set_casos_reabiertos
             )
             
-            # Validación: ¿Faltan tickets? (Están en puntuales pero no en el historial)
-            encontrados = len(df_kenny)
+            # Validación: Comparar encontrados filtrados vs total buscado
+            encontrados_filtrados = len(df_kenny)
             total_buscados = len(ids_compromisos)
-            if encontrados < total_buscados:
-                st.warning(f"⚠️ Ojo: Cargaste {total_buscados} órdenes en 'Puntuales', pero solo se encontraron {encontrados} en la base de datos KUNAI.")
-        else:
-            st.warning("❌ Ninguna de las órdenes cargadas en 'Puntuales' aparece en el historial de KUNAI.")
             
+            if encontrados_filtrados < total_buscados:
+                # Mensaje inteligente dependiendo del filtro
+                if supervisor_sel != "Todos" or st.session_state.user_role == "supervisor":
+                    st.info(f"ℹ️ De los {total_buscados} tickets cargados en 'Puntuales', **{encontrados_filtrados}** pertenecen al supervisor seleccionado/actual.")
+                else:
+                    st.warning(f"⚠️ Ojo: Cargaste {total_buscados} órdenes, pero solo se encontraron {encontrados_filtrados} en la base de datos KUNAI.")
+        else:
+            if not df_kenny_base.empty:
+                st.info(f"ℹ️ Hay tickets de Kenny ({len(df_kenny_base)}), pero **ninguno pertenece al supervisor seleccionado**.")
+            else:
+                st.warning("❌ Ninguna de las órdenes cargadas en 'Puntuales' aparece en el historial de KUNAI.")
+
 elif menu == "🔍 Tracking Ticket":
     st.title(f"🔍 Tracking de Tickets - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Esta página busca en **todo el historial** de la base de datos, no solo en los tickets de hoy.")
