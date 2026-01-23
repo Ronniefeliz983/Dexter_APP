@@ -2627,7 +2627,7 @@ elif menu == "🤝 Tickets Kenny":
             df_estado_actual_todos['OrdenExterna'].isin(ids_compromisos)
         ].copy()
 
-        # --- APLICACIÓN DEL FILTRO DE SUPERVISOR (IGUAL QUE LAS DEMÁS PESTAÑAS) ---
+        # --- APLICACIÓN DEL FILTRO DE SUPERVISOR ---
         df_kenny = df_kenny_base.copy()
         
         # Caso 1: Si es Supervisor, filtra por SU ID
@@ -2635,23 +2635,21 @@ elif menu == "🤝 Tickets Kenny":
             if 'Supervisor' in df_kenny.columns:
                 df_kenny = df_kenny[df_kenny['Supervisor'].astype(str).str.strip() == str(st.session_state.supervisor_id).strip()]
         
-        # Caso 2: Si es Admin/Gerencia y seleccionó un supervisor específico en el sidebar
+        # Caso 2: Si es Admin/Gerencia y seleccionó un supervisor específico
         elif st.session_state.user_role in ["admin", "gerencia", "supervisor_old"] and supervisor_sel != "Todos":
             if 'Supervisor' in df_kenny.columns:
                 df_kenny = df_kenny[df_kenny['Supervisor'].astype(str).str.strip() == str(supervisor_sel).strip()]
         # ---------------------------------------------------------------------------
 
-        # 3. Mostrar KPIs y Tablas (Usando df_kenny ya filtrado)
+        # 3. Mostrar KPIs y Tablas
         if not df_kenny.empty:
-            # Calcular métricas específicas para este grupo filtrado
+            # KPIs
             kpis_kenny = calcular_kpis(df_kenny, df_full_historial)
-            
-            # Mostramos las métricas
             display_kpi_metrics(kpis_kenny, page_key="kenny", critical_metric_key='Pendientes', critical_delta_text="Pendientes")
             
             st.markdown("---")
             
-            # Resumen por Supervisor (Si es admin y ve Todos, esto es útil. Si es supervisor, solo saldrá él)
+            # --- 1. RESUMEN POR SUPERVISOR ---
             st.subheader("👥 Asignación por Supervisor")
             resumen_kenny = crear_resumen_admin(
                 df_kenny, df_hc_supervisores, df_hc_tecnicos, 
@@ -2662,6 +2660,31 @@ elif menu == "🤝 Tickets Kenny":
                 resumen_kenny.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
                 use_container_width=True, hide_index=True
             )
+
+            # --- 2. RESUMEN POR TÉCNICO (NUEVO) ---
+            st.markdown("---")
+            st.subheader("👨‍🔧 Resumen por Técnico")
+            if 'Asignado_A' in df_kenny.columns:
+                resumen_tec_kenny = crear_resumen_admin(
+                    df_kenny, 
+                    df_hc_supervisores, 
+                    df_hc_tecnicos, 
+                    agrupar_por='Asignado_A', 
+                    logica_tecnico=True, 
+                    reabiertos_set=set_casos_reabiertos
+                )
+                
+                if not resumen_tec_kenny.empty:
+                    # Corrección de nombre de columna si es necesario
+                    resumen_tec_kenny.rename(columns={'Supervisor': 'Asignado_A'}, inplace=True, errors='ignore')
+                    
+                    st.dataframe(
+                        resumen_tec_kenny.style.apply(aplicar_estilo_resumen_tecnico, axis=1).format({'Eficiencia_Total_%': '{:.1f}'}), 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+            else:
+                st.info("No hay información de técnicos disponible para mostrar.")
 
             st.markdown("---")
             st.subheader("📋 Detalle de los Compromisos")
@@ -2679,16 +2702,15 @@ elif menu == "🤝 Tickets Kenny":
                 reabiertos_set=set_casos_reabiertos
             )
             
-            # Validación: Comparar encontrados filtrados vs total buscado
+            # Validación
             encontrados_filtrados = len(df_kenny)
             total_buscados = len(ids_compromisos)
             
             if encontrados_filtrados < total_buscados:
-                # Mensaje inteligente dependiendo del filtro
                 if supervisor_sel != "Todos" or st.session_state.user_role == "supervisor":
-                    st.info(f"ℹ️ De los {total_buscados} tickets cargados en 'Puntuales', **{encontrados_filtrados}** pertenecen al supervisor seleccionado/actual.")
+                    st.info(f"ℹ️ De los {total_buscados} tickets cargados, **{encontrados_filtrados}** coinciden con tu filtro.")
                 else:
-                    st.warning(f"⚠️ Ojo: Cargaste {total_buscados} órdenes, pero solo se encontraron {encontrados_filtrados} en la base de datos KUNAI.")
+                    st.warning(f"⚠️ Ojo: Cargaste {total_buscados} órdenes, pero solo se encontraron {encontrados_filtrados} en KUNAI.")
         else:
             if not df_kenny_base.empty:
                 st.info(f"ℹ️ Hay tickets de Kenny ({len(df_kenny_base)}), pero **ninguno pertenece al supervisor seleccionado**.")
