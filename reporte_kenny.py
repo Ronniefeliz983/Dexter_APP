@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 DB_URL = os.getenv("DATABASE_URL")
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
-# Aquí puedes poner el correo de Kenny o a quien se le envíe
 EMAIL_DESTINATARIOS = os.getenv("EMAIL_JEFE") 
 
 def obtener_tickets_kenny():
@@ -40,18 +39,16 @@ def obtener_tickets_kenny():
             if not lista_ids:
                 return None
 
-            # 2. Obtener el historial SOLO de esos tickets
-            # Usamos parámetros seguros (:ids) o formateo si la lista es segura
-            # Para simplicidad y velocidad en pandas: traemos datos relevantes
-            query_historia = text("""
-                SELECT orden_externa, estado, cliente, supervisor, asignado_a, 
-                       vence, timestamp_procesado, tipo_servicio, municipio
-                FROM historial_cambios
-            """)
+            # 2. Obtener el historial COMPLETO de esos tickets (SELECT *)
+            # Traemos TODAS las columnas
+            query_historia = text("SELECT * FROM historial_cambios")
             df_full = pd.read_sql(query_historia, conn)
             
+            if df_full.empty:
+                return None
+
             # 3. Filtrar en Pandas (cruce de datos)
-            # Nos quedamos solo con las ordenes que están en la lista de puntuales
+            # Nos quedamos solo con las ordenes que están en la lista de Kenny
             df_kenny = df_full[df_full['orden_externa'].astype(str).isin(lista_ids)].copy()
             
             if df_kenny.empty:
@@ -59,18 +56,22 @@ def obtener_tickets_kenny():
                 return None
 
             # 4. Obtener solo el ÚLTIMO estado de cada ticket
-            df_kenny = df_kenny.sort_values('timestamp_procesado', ascending=False)
+            # Ordenamos por fecha de proceso (descendente) y nos quedamos con el primero
+            if 'timestamp_procesado' in df_kenny.columns:
+                df_kenny['timestamp_procesado'] = pd.to_datetime(df_kenny['timestamp_procesado'])
+                df_kenny = df_kenny.sort_values('timestamp_procesado', ascending=False)
+            
             df_final = df_kenny.drop_duplicates(subset=['orden_externa'], keep='first')
             
-            # (Opcional) Filtrar columnas para que el Excel se vea limpio
-            cols_exportar = ['orden_externa', 'estado', 'cliente', 'supervisor', 'asignado_a', 'vence', 'tipo_servicio', 'municipio']
-            # Seleccionamos solo las columnas que existen
-            cols_finales = [c for c in cols_exportar if c in df_final.columns]
+            # 5. Limpieza final (Opcional)
+            # Quitamos columnas técnicas que no le sirven a Kenny (como ids internos o fechas duplicadas)
+            cols_a_borrar = ['id', 'fecha_actualizacion', 'fecha_registro'] 
+            df_final = df_final.drop(columns=[c for c in cols_a_borrar if c in df_final.columns], errors='ignore')
             
-            return df_final[cols_finales]
+            return df_final
 
     except Exception as e:
-        print(f"Error conectando a la base de datos: {e}")
+        print(f"Error conectando a la base de datos o procesando: {e}")
         return None
 
 def enviar_correo():
@@ -82,17 +83,16 @@ def enviar_correo():
     
     if df is None or df.empty:
         print(f"No hay tickets de Kenny para reportar hoy ({fecha_hoy})")
-        # Opcional: Podrías enviar un correo diciendo "No hay tickets pendientes"
         return
 
     # Generar Excel
-    nombre_archivo = f"Reporte_Kenny_{fecha_hoy}.xlsx"
+    nombre_archivo = f"Reporte_Kenny_Completo_{fecha_hoy}.xlsx"
     df.to_excel(nombre_archivo, index=False)
-    print(f"Excel generado: {nombre_archivo} con {len(df)} filas.")
+    print(f"Excel generado: {nombre_archivo} con {len(df)} filas y todas las columnas.")
 
     # Configurar Correo
     msg = MIMEMultipart()
-    msg['Subject'] = f"🚀 Reporte Tickets Kenny - {fecha_hoy} (5:30 PM)"
+    msg['Subject'] = f"🚀 Reporte Tickets Kenny (Detalle Completo) - {fecha_hoy} (5:30 PM)"
     msg['From'] = EMAIL_USER
     msg['To'] = EMAIL_DESTINATARIOS
 
@@ -101,7 +101,9 @@ def enviar_correo():
     
     Adjunto el reporte de los tickets puntuales (lista de Kenny) actualizado al corte de las 5:30 PM.
     
-    Total de casos en seguimiento: {len(df)}
+    Este archivo contiene TODAS las columnas disponibles.
+    
+    Total de casos: {len(df)}
     
     Saludos,
     Tu Asistente Virtual 🤖
@@ -129,7 +131,7 @@ def enviar_correo():
     except Exception as e:
         print(f"❌ Error enviando correo: {e}")
     finally:
-        # Limpieza
+        # Limpieza del archivo temporal
         if os.path.exists(nombre_archivo):
             os.remove(nombre_archivo)
 
