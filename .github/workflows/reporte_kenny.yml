@@ -1,0 +1,34 @@
+name: Reporte Kenny 5:30 PM
+
+on:
+  schedule:
+    # 5:30 PM hora RD es 21:30 UTC
+    - cron: '30 21 * * *'
+  workflow_dispatch: # Botón para enviar manual si quieres probar
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: Dexter
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Instalar dependencias
+        run: |
+          pip install pandas sqlalchemy psycopg2-binary openpyxl
+
+      - name: Ejecutar script de envío
+        env:
+          # Mapeamos tus secretos a las variables que usa el script
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_JEFE: ${{ secrets.EMAIL_JEFE }}
+        run: python scripts/reporte_kenny.py
