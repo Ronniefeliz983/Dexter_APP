@@ -4,7 +4,7 @@ on:
   schedule:
     # 5:30 PM hora RD es 21:30 UTC
     - cron: '30 21 * * *'
-  workflow_dispatch: # Botón para enviar manual si quieres probar
+  workflow_dispatch:
 
 jobs:
   build:
@@ -26,9 +26,9 @@ jobs:
 
       - name: Ejecutar script de envío
         env:
-          # Mapeamos tus secretos a las variables que usa el script
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_JEFE: ${{ secrets.EMAIL_JEFE }}
-        run: python scripts/reporte_kenny.py
+        # ESTA ES LA LÍNEA CORREGIDA (sin 'scripts/'):
+        run: python reporte_kenny.py
