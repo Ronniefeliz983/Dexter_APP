@@ -2685,6 +2685,38 @@ elif menu == "🤝 Tickets Kenny":
         # 3. FILTROS DE USUARIO (Supervisor y Técnico)
         df_kenny_filtrado = df_kenny_base.copy()
         
+        # ================================================================
+        # --- ¡MODIFICACIÓN LÓGICA PYME! ---
+        # Objetivo: Ocultar PYME "0 Días" (Creado Hoy), pero mostrar PYME "Puntual" (Creado Ayer)
+        # ================================================================
+        if 'Es_PYME_Negocio' in df_kenny_filtrado.columns and 'OE_Creacion' in df_kenny_filtrado.columns:
+            total_antes = len(df_kenny_filtrado)
+            
+            # Obtener fecha de hoy (usando tu función de hora AST para coherencia)
+            fecha_hoy_pyme = get_current_ast_time().date()
+            
+            # Asegurarse que OE_Creacion es datetime
+            if not pd.api.types.is_datetime64_any_dtype(df_kenny_filtrado['OE_Creacion']):
+                df_kenny_filtrado['OE_Creacion'] = pd.to_datetime(df_kenny_filtrado['OE_Creacion'], errors='coerce')
+            
+            # Definimos la MÁSCARA DE EXCLUSIÓN (Lo que queremos borrar):
+            # 1. Es PYME de Negocio (True)
+            # 2. Y la fecha de creación es HOY (es decir, PYME 0 días)
+            mask_pyme_0_dias = (
+                (df_kenny_filtrado['Es_PYME_Negocio'] == True) & 
+                (df_kenny_filtrado['OE_Creacion'].dt.date == fecha_hoy_pyme)
+            )
+            
+            # Filtramos: Nos quedamos con lo que NO (~) cumple esa condición
+            # Esto DEJA pasar los PYME creados AYER (Puntuales) y los No-PYME
+            df_kenny_filtrado = df_kenny_filtrado[~mask_pyme_0_dias]
+            
+            # Opcional: Mostrar mensaje informativo
+            omitidos_pyme = total_antes - len(df_kenny_filtrado)
+            if omitidos_pyme > 0:
+                st.info(f"ℹ️ Se han ocultado automáticamente **{omitidos_pyme}** tickets PYME '0 Días' (Creados hoy).")
+        # ================================================================
+        
         # A. Filtro Supervisor (Sidebar)
         if st.session_state.user_role == "supervisor":
             if 'Supervisor' in df_kenny_filtrado.columns:
@@ -2737,10 +2769,10 @@ elif menu == "🤝 Tickets Kenny":
             )
         else:
             if not df_kenny_base.empty:
-                st.info(f"ℹ️ Hay {len(df_kenny_base)} tickets cargados, pero ninguno coincide con tus filtros (Supervisor/Técnico).")
+                st.info(f"ℹ️ Hay {len(df_kenny_base)} tickets cargados, pero ninguno coincide con tus filtros o fueron ocultados por ser PYME 0 Días.")
             else:
                 st.warning("❌ Ninguno de los tickets cargados en 'Puntuales' aparece en la base de datos KUNAI.")
-
+                
 elif menu == "🔍 Tracking Ticket":
     st.title(f"🔍 Tracking de Tickets - {supervisor_sel if supervisor_sel != 'Todos' else st.session_state.user_role.title()}")
     st.info("Esta página busca en **todo el historial** de la base de datos, no solo en los tickets de hoy.")
@@ -3105,6 +3137,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
