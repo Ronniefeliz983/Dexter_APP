@@ -378,12 +378,13 @@ def get_earliest_batch_initial_cohort(df_full_historial):
         return set()
 
 # ***** FUNCIÓN MODIFICADA *****
+# ***** FUNCIÓN MODIFICADA (Lógica Rebote/Citas actualizada) *****
 def calcular_kpis(df, df_full_historial):
     default_kpis = {
             'Total': 0,'Cerrados': 0,'Referidos': 0,'Citados': 0,
             'Rebote': 0,'Pendientes': 0,'Manejados': 0,'Eficiencia_Total_%': 0.0,
             'Total_Iniciado': 0, 'Manejados_Inicial': 0, 'Eficiencia_Inicial': 0.0,
-            'Pymes_Vencidos': 0, 'Pymes_Cerrados_en_Tiempo': 0 # <-- Valores por defecto
+            'Pymes_Vencidos': 0, 'Pymes_Cerrados_en_Tiempo': 0
         }
     if df is None or df.empty or 'Estado' not in df.columns or 'OrdenExterna' not in df.columns:
         return default_kpis
@@ -394,8 +395,13 @@ def calcular_kpis(df, df_full_historial):
     total = len(df_kpi)
     cerrados = df_kpi[df_kpi['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
     referidos = df_kpi[df_kpi['Estado'] == 'pend trab interno'].shape[0]
-    citados = df_kpi[df_kpi['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-    rebote = df_kpi[df_kpi['Estado'] == 'validacion int'].shape[0]
+    
+    # --- CAMBIO AQUÍ: Solo 'calendarizado' cuenta como Citado ---
+    citados = df_kpi[df_kpi['Estado'] == 'calendarizado'].shape[0]
+    
+    # --- CAMBIO AQUÍ: 'pendiente de calendarizacion' ahora se suma a 'validacion int' como REBOTE ---
+    rebote = df_kpi[df_kpi['Estado'].isin(['validacion int', 'pendiente de calendarizacion'])].shape[0]
+    
     pendientes = df_kpi[df_kpi['Estado'].isin(['activo', 'iniciado'])].shape[0]
     manejados = cerrados + referidos + citados + rebote
     
@@ -417,8 +423,11 @@ def calcular_kpis(df, df_full_historial):
                 df_kpi_del_cohort_intersectado = df_kpi[df_kpi['OrdenExterna'].isin(cohort_tickets_in_current_page_ids)]
                 cerrados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['cerrado', 'validacion ext'])].shape[0]
                 referidos_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'pend trab interno'].shape[0]
-                citados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['pendiente de calendarizacion', 'calendarizado'])].shape[0]
-                rebote_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'validacion int'].shape[0]
+                
+                # --- CAMBIO LÓGICA INICIAL TAMBIÉN ---
+                citados_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'] == 'calendarizado'].shape[0]
+                rebote_inicial = df_kpi_del_cohort_intersectado[df_kpi_del_cohort_intersectado['Estado'].isin(['validacion int', 'pendiente de calendarizacion'])].shape[0]
+                
                 manejados_inicial_en_pagina = cerrados_inicial + referidos_inicial + citados_inicial + rebote_inicial
                 eficiencia_inicial = round(manejados_inicial_en_pagina * 100 / total_iniciado_en_pagina, 1)
         except Exception as e:
@@ -427,33 +436,28 @@ def calcular_kpis(df, df_full_historial):
             manejados_inicial_en_pagina = 0
             eficiencia_inicial = 0.0
 
-    # --- ¡NUEVO! CÁLCULOS ESPECÍFICOS DE PYME ---
+    # --- CÁLCULOS ESPECÍFICOS DE PYME ---
     pymes_vencidos = 0
     pymes_cerrados_en_tiempo = 0
 
     if 'Vencido' in df_kpi.columns:
-        # Asegurar que 'Vencido' es booleano (ya debería estarlo por cargar_datos)
         df_kpi['Vencido'] = df_kpi['Vencido'].fillna(False).astype(bool)
         
-        # --- ¡ESTA ES LA LÍNEA CORREGIDA! ---
         # 1. Contar Pymes Vencidas (Solo las que están PENDIENTES Y VENCIDAS)
         pendientes_mask = df_kpi['Estado'].isin(['activo', 'iniciado'])
         vencido_mask = df_kpi['Vencido'] == True
         pymes_vencidos = df_kpi[pendientes_mask & vencido_mask].shape[0]
-        # --- FIN DE LA CORRECCIÓN ---
         
         # 2. Contar Pymes Cerradas en Tiempo
         cerrados_mask = df_kpi['Estado'].isin(['cerrado', 'validacion ext'])
         en_tiempo_mask = df_kpi['Vencido'] == False
         pymes_cerrados_en_tiempo = df_kpi[cerrados_mask & en_tiempo_mask].shape[0]
-    # --- FIN DE NUEVOS CÁLCULOS ---
 
     return {
         'Total': total, 'Cerrados': cerrados, 'Referidos': referidos, 'Citados': citados,
         'Rebote': rebote, 'Pendientes': pendientes, 'Manejados': manejados,
         'Eficiencia_Total_%': eficiencia_total, 'Total_Iniciado': total_iniciado_en_pagina, 
         'Manejados_Inicial': manejados_inicial_en_pagina, 'Eficiencia_Inicial': eficiencia_inicial,
-        # --- ¡NUEVAS KPIS AÑADIDAS AL RETORNO! ---
         'Pymes_Vencidos': pymes_vencidos,
         'Pymes_Cerrados_en_Tiempo': pymes_cerrados_en_tiempo
     }
@@ -1178,20 +1182,19 @@ def aplicar_estilo_resumen_tecnico(row):
 # --- ¡FUNCIÓN MODIFICADA! ---
 # --- ¡FUNCIÓN MODIFICADA v2.7.8! ---
 # Se añade el parámetro 'reabiertos_set' para calcular la columna 'Reabiertos'
+# --- ¡FUNCIÓN MODIFICADA v2.7.8! (Lógica Rebote Actualizada) ---
 def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', logica_tecnico=False, es_pyme_page=False, es_puntualidad_page=False, reabiertos_set=None):
-    # --- MODIFICADO: Definición de columnas base ---
+    # --- Definición de columnas base ---
     cols_base = [
         agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
         'Pendientes', 'Total Manejado'
     ]
     
-    # --- Añadir columnas PYME solo si es la página de PYME ---
     if es_pyme_page:
         cols = cols_base + ['Cerrados en Tiempo', 'Vencidos', 'Reabiertos', 'Eficiencia_Total_%']
     else:
         cols = cols_base + ['Reabiertos', 'Eficiencia_Total_%']
 
-    # Inicializar reabiertos_set si es None
     if reabiertos_set is None:
         reabiertos_set = set()
     
@@ -1206,11 +1209,10 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
     df_copy[agrupar_por] = df_copy[agrupar_por].fillna('Desconocido').astype(str).str.lower()
     df_copy['Estado'] = df_copy['Estado'].fillna('Desconocido').astype(str).str.lower()
 
-    # --- ¡NUEVO v2.7.8! Marcar los tickets que son reabiertos ---
+    # Marcar los tickets que son reabiertos
     df_copy['Es_Reabierto'] = df_copy['OrdenExterna'].astype(str).isin(reabiertos_set)
-    # --- FIN NUEVO v2.7.8 ---
 
-    # --- Lógica Pyme (sin cambios) ---
+    # --- Lógica Pyme ---
     if es_pyme_page and 'Vencido' in df_copy.columns:
         df_copy['Vencido'] = df_copy['Vencido'].fillna(False).astype(bool)
         pendientes_mask = df_copy['Estado'].isin(['activo', 'iniciado'])
@@ -1221,21 +1223,27 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         df_copy['Es_Vencido'] = False
         df_copy['Es_Cerrado_Tiempo'] = False
 
-    # --- Lógica de Puntualidad (sin cambios) ---
-    estados_citados = ['pendiente de calendarizacion', 'calendarizado']
+    # --- CAMBIO IMPORTANTE: DEFINICIÓN DE ESTADOS ---
+    # Citados solo es calendarizado
+    estados_citados = ['calendarizado'] 
+    # Rebote ahora incluye validacion int Y pendiente de calendarizacion
+    estados_rebote = ['validacion int', 'pendiente de calendarizacion'] 
     
     # Pre-calcular las categorías
     agg_dict_base = {
         'Cerrados': ('Estado', lambda x: x.isin(['cerrado', 'validacion ext']).sum()),
         'Referidos': ('Estado', lambda x: (x == 'pend trab interno').sum()),
-        'Citados': ('Estado', lambda x: x.isin(estados_citados).sum()),
-        'Rebote': ('Estado', lambda x: (x == 'validacion int').sum()),
+        'Citados': ('Estado', lambda x: x.isin(estados_citados).sum()), 
+        'Rebote': ('Estado', lambda x: x.isin(estados_rebote).sum()), # <-- Aquí se aplica el cambio
         'Pendientes': ('Estado', lambda x: x.isin(['activo', 'iniciado']).sum()),
-        # --- ¡NUEVO v2.7.8! Agregar conteo de reabiertos ---
         'Reabiertos': ('Es_Reabierto', 'sum')
     }
     
     if es_puntualidad_page:
+        # En puntualidad, el Total excluye los citados (ya definidos arriba como solo 'calendarizado')
+        # Si quieres excluir también 'pendiente de calendarizacion' del total de puntualidad, 
+        # debes decidir si sigue siendo "manejado".
+        # Con la lógica actual, 'pendiente de calendarizacion' es Rebote, por lo que SÍ cuenta en Total Manejado.
         agg_dict_base['Total'] = ('Estado', lambda x: (~x.isin(estados_citados)).sum())
     else:
         agg_dict_base['Total'] = ('OrdenExterna', 'count')
@@ -1247,7 +1255,7 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
     # Calcular el resumen con TODOS los datos
     resumen = df_copy.groupby(agrupar_por).agg(**agg_dict_base).reset_index()
 
-    # --- BLOQUE DE MERGE (sin cambios) ---
+    # --- BLOQUE DE MERGE (Nombres) ---
     df_nombres_para_merge = None
     if agrupar_por == 'Supervisor' and df_hc_supervisores is not None and not df_hc_supervisores.empty:
         df_nombres_para_merge = df_hc_supervisores
@@ -1276,10 +1284,11 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         except Exception as e:
             st.warning(f"No se pudo hacer merge con nombres de {agrupar_por}: {e}")
 
-    # --- Lógica de 'Total Manejado' y 'Eficiencia' (sin cambios) ---
     if es_pyme_page:
         resumen.rename(columns={'Cerrados_en_Tiempo': 'Cerrados en Tiempo'}, inplace=True, errors='ignore')
     
+    # Cálculo de Total Manejado
+    # Ahora Rebote ya incluye 'pendiente de calendarizacion', así que la suma funciona igual
     if es_puntualidad_page:
         resumen['Total Manejado'] = resumen['Cerrados'] + resumen['Referidos'] + resumen['Rebote']
     else:
@@ -1296,7 +1305,7 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
                                                 round(resumen['Total Manejado'] * 100 / resumen['Total'], 1),
                                                 0.0)
     
-    # --- FILA TOTAL MODIFICADA ---
+    # --- FILA TOTAL ---
     if not resumen.empty:
         total_row = pd.Series(name='Total')
         
@@ -1315,7 +1324,6 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         total_row['Rebote'] = resumen['Rebote'].sum()
         total_row['Pendientes'] = resumen['Pendientes'].sum()
         total_row['Total Manejado'] = resumen['Total Manejado'].sum()
-        # --- ¡NUEVO v2.7.8! Sumar reabiertos en el total ---
         total_row['Reabiertos'] = resumen['Reabiertos'].sum()
         
         if es_pyme_page:
@@ -1328,7 +1336,6 @@ def crear_resumen_admin(df, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Sup
         
         resumen = pd.concat([resumen, total_row.to_frame().T], ignore_index=True)
     
-    # ¡MODIFICADO! Lógica de orden de columnas (con 'Reabiertos')
     if es_pyme_page:
         column_order = [
             agrupar_por, 'Total', 'Cerrados', 'Referidos', 'Citados', 'Rebote', 
@@ -1398,12 +1405,13 @@ def filtrar_dataframe_con_historial(df_completo_historial, df_unicos_para_buscar
 # -----------------------------------------------
 def get_color_estado(estado_str):
     estado_str = str(estado_str).lower()
-    if estado_str in ['cerrado', 'validacion ext']: return '#32CD32'
-    elif estado_str in ['pendiente de calendarizacion', 'calendarizado']: return '#FFD700'
-    elif estado_str == 'pend trab interno': return '#FFA500'
-    elif estado_str in ['activo', 'iniciado']: return '#1E90FF'
-    elif estado_str == 'validacion int': return '#8A2BE2'
-    else: return '#696969'
+    if estado_str in ['cerrado', 'validacion ext']: return '#32CD32' # Verde
+    elif estado_str == 'calendarizado': return '#FFD700' # Amarillo
+    elif estado_str == 'pend trab interno': return '#FFA500' # Naranja
+    elif estado_str in ['activo', 'iniciado']: return '#1E90FF' # Azul
+    # Morado para Rebotes (Validacion Int y Pendiente de Calendarizacion)
+    elif estado_str in ['validacion int', 'pendiente de calendarizacion']: return '#8A2BE2' 
+    else: return '#696969' # Gris
 
 def formatear_fecha(fecha_dt):
     if pd.isna(fecha_dt): return 'N/A'
@@ -3137,6 +3145,7 @@ elif menu == "🔄 Reabiertos":
 # --- ¡NUEVO! ROUTING PARA LA PÁGINA DE ADMIN ---
 elif menu == "⚙️ Admin Usuarios":
     render_admin_crud_page()
+
 
 
 
