@@ -2616,7 +2616,6 @@ elif menu == "🤝 Tickets Kenny":
     st.title(f"🤝 Compromisos de Kenny (Puntuales)")
     
     # --- SECCIÓN A: CARGA DE DATOS (INGESTA) ---
-    # (MANTENER EL CÓDIGO DE CARGA/PEGADO DE EXCEL IGUAL QUE ANTES...)
     with st.expander("➕ Cargar Nuevos Compromisos (Pegar desde Excel)"):
         c_load1, c_load2 = st.columns([2, 1])
         with c_load1:
@@ -2626,23 +2625,28 @@ elif menu == "🤝 Tickets Kenny":
                     import pyperclip
                     texto = pyperclip.paste()
                     if texto and not texto.isspace():
+                        # 1. Limpieza
                         lineas = [l.strip() for l in texto.splitlines() if l.strip()]
                         ids_pegados = [l for l in lineas if l.isdigit() and len(l) > 4]
                         
                         if ids_pegados:
                             engine = get_database_engine()
                             with engine.begin() as conn:
+                                # 2. Obtener existentes para comparar
                                 existentes = pd.read_sql("SELECT orden_externa FROM puntuales", conn)
                                 set_existentes = set(existentes['orden_externa'].astype(str).str.strip()) if not existentes.empty else set()
+                                
+                                # 3. Filtrar nuevas
                                 ids_nuevos = [x for x in ids_pegados if x not in set_existentes]
                                 omitidos = len(ids_pegados) - len(ids_nuevos)
                                 
+                                # 4. Guardar
                                 if ids_nuevos:
                                     df_new = pd.DataFrame({'orden_externa': ids_nuevos})
                                     df_new.to_sql('puntuales', conn, if_exists='append', index=False)
                                     st.success(f"✅ Se guardaron **{len(ids_nuevos)}** órdenes nuevas.")
                                     if omitidos > 0: st.warning(f"👀 Se omitieron **{omitidos}** repetidas.")
-                                    st.cache_data.clear()
+                                    st.cache_data.clear() # Limpiar caché para ver cambios
                                     time.sleep(1.5)
                                     st.rerun()
                                 else:
@@ -2655,7 +2659,7 @@ elif menu == "🤝 Tickets Kenny":
                     st.error(f"Error al guardar: {e}")
 
         with c_load2:
-            st.write("") 
+            st.write("") # Espacio
             st.write("")
             if st.button("🗑️ Borrar Lista", type="primary", use_container_width=True):
                 try:
@@ -2689,21 +2693,30 @@ elif menu == "🤝 Tickets Kenny":
         # 3. FILTROS DE USUARIO (Supervisor y Técnico)
         df_kenny_filtrado = df_kenny_base.copy()
         
-        # --- LÓGICA PYME (Ocultar 0 días) ---
+        # --- LÓGICA PYME (Ocultar PYME 0 días / Creadas Hoy) ---
         if 'Es_PYME_Negocio' in df_kenny_filtrado.columns and 'OE_Creacion' in df_kenny_filtrado.columns:
             total_antes = len(df_kenny_filtrado)
+            
+            # Obtener fecha de hoy
             fecha_hoy_pyme = get_current_ast_time().date()
+            
+            # Asegurar datetime
             if not pd.api.types.is_datetime64_any_dtype(df_kenny_filtrado['OE_Creacion']):
                 df_kenny_filtrado['OE_Creacion'] = pd.to_datetime(df_kenny_filtrado['OE_Creacion'], errors='coerce')
             
+            # Máscara: Es PYME Y se creó HOY
             mask_pyme_0_dias = (
                 (df_kenny_filtrado['Es_PYME_Negocio'] == True) & 
                 (df_kenny_filtrado['OE_Creacion'].dt.date == fecha_hoy_pyme)
             )
+            
+            # Filtramos (excluyendo la máscara)
             df_kenny_filtrado = df_kenny_filtrado[~mask_pyme_0_dias]
+            
             omitidos_pyme = total_antes - len(df_kenny_filtrado)
             if omitidos_pyme > 0:
                 st.info(f"ℹ️ Se han ocultado automáticamente **{omitidos_pyme}** tickets PYME '0 Días' (Creados hoy).")
+        # ---------------------------------------------------------
         
         # A. Filtro Supervisor (Sidebar)
         if st.session_state.user_role == "supervisor":
@@ -2725,7 +2738,7 @@ elif menu == "🤝 Tickets Kenny":
                     df_kenny_filtrado = df_kenny_filtrado[df_kenny_filtrado['Asignado_A'].astype(str).str.strip() == str(tecnico_sel).strip()]
 
         # ==============================================================================
-        # --- NUEVA LÓGICA DE SEPARACIÓN (HOY vs MAÑANA) ---
+        # --- LÓGICA DE SEPARACIÓN (HOY vs MAÑANA) ---
         # ==============================================================================
         
         # Inicializamos DataFrames
@@ -2748,19 +2761,19 @@ elif menu == "🤝 Tickets Kenny":
         # ==============================================================================
         
         if not df_kenny_hoy.empty:
-            # KPIs (Usamos solo los de HOY/RESTO)
+            # KPIs
             kpis = calcular_kpis(df_kenny_hoy, df_full_historial)
             display_kpi_metrics(kpis, "kenny", 'Pendientes', "Pendientes")
             
             st.markdown("---")
             
-            # Resumen Supervisor
+            # Resumen Supervisor (HOY)
             if 'Supervisor' in df_kenny_hoy.columns:
                 st.subheader("👥 Resumen Supervisor")
                 resumen_sup = crear_resumen_admin(df_kenny_hoy, df_hc_supervisores, df_hc_tecnicos, agrupar_por='Supervisor', reabiertos_set=set_casos_reabiertos)
                 st.dataframe(resumen_sup.style.format({'Eficiencia_Total_%': '{:.1f}'}), use_container_width=True, hide_index=True)
 
-            # Resumen Técnico
+            # Resumen Técnico (HOY)
             st.markdown("---")
             st.subheader("👨‍🔧 Resumen Técnico")
             if 'Asignado_A' in df_kenny_hoy.columns:
@@ -2778,11 +2791,14 @@ elif menu == "🤝 Tickets Kenny":
                 supervisor_sel, estatus_sel, "kenny_detail", "Tickets_Kenny_Hoy", set_casos_reabiertos
             )
         else:
+            # Si hoy está vacío pero hay datos cargados
             if not df_kenny_base.empty and df_kenny_manana.empty:
                  st.info(f"ℹ️ Hay tickets cargados, pero ninguno coincide con tus filtros principales.")
+            elif df_kenny_base.empty:
+                 st.warning("❌ Ninguno de los tickets cargados en 'Puntuales' aparece en la base de datos KUNAI.")
 
         # ==============================================================================
-        # 5. MOSTRAR TABLA "PUNTUALES PARA MAÑANA" (Nueva Sección Abajo)
+        # 5. MOSTRAR TABLA "PUNTUALES PARA MAÑANA" (Con Resumen)
         # ==============================================================================
         
         if not df_kenny_manana.empty:
@@ -2790,6 +2806,25 @@ elif menu == "🤝 Tickets Kenny":
             st.markdown("### 🔮 Puntuales para Mañana")
             st.info(f"Estos tickets tienen vencimiento marcado como 'Mañana' ({len(df_kenny_manana)} tickets).")
             
+            # --- TABLA RESUMEN SUPERVISOR (MAÑANA) ---
+            st.subheader("👥 Resumen Supervisor (Mañana)")
+            resumen_sup_manana = crear_resumen_admin(
+                df_kenny_manana, 
+                df_hc_supervisores, 
+                df_hc_tecnicos, 
+                agrupar_por='Supervisor', 
+                reabiertos_set=set_casos_reabiertos
+            )
+            st.dataframe(
+                resumen_sup_manana.style.format({'Eficiencia_Total_%': '{:.1f}'}), 
+                use_container_width=True, 
+                hide_index=True
+            )
+            # -----------------------------------------
+            
+            st.write("") # Espacio
+            
+            # Tabla Detalle (MAÑANA)
             display_detail_table(
                 df_kenny_manana, df_full_historial, 
                 st.session_state.user_role, st.session_state.supervisor_id, 
