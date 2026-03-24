@@ -1035,46 +1035,41 @@ def cargar_head_count_tecnico():
 
 # --- ¡CAMBIO 5! USAR EL "TRUCO DEL TIMESTAMP" ---
 # 1. Obtenemos el "trigger" (esto usa el caché de 10 seg)
+# ==============================================================================
+# --- LÓGICA PRINCIPAL (v2.7.7 - FIXED NO DATA LOCK) ---
+# ==============================================================================
+
+# 1. Obtenemos el "trigger"
 last_db_update = get_last_update_timestamp()
 
 # 2. Pasamos el trigger a las funciones de carga.
 df_full_historial, last_update_time = cargar_datos(_last_update_ts=last_db_update)
 df_reabiertos_full = cargar_datos_reabiertos(_last_update_ts=last_db_update)
-# --- FIN DEL CAMBIO 5 ---
 df_puntuales_raw = cargar_datos_puntuales()
 
-df_hc_supervisores = cargar_head_count_supervisor() # <-- Renombrado (antes df_head_count)
-df_hc_tecnicos = cargar_head_count_tecnico() # <-- NUEVA LÍNEA v2.7.3
+df_hc_supervisores = cargar_head_count_supervisor()
+df_hc_tecnicos = cargar_head_count_tecnico()
 
-# ***** INICIO CAMBIO v2.7.5: Crear set de reabiertos para resaltar *****
+# Set de reabiertos
 if df_reabiertos_full is not None and not df_reabiertos_full.empty and 'caso' in df_reabiertos_full.columns:
-    # Creamos un set (lista rápida) de todos los 'caso' en reabiertos
     set_casos_reabiertos = set(df_reabiertos_full['caso'].dropna().astype(str))
 else:
-    set_casos_reabiertos = set() # Vacío si no hay datos
-# ***** FIN CAMBIO v2.7.5 *****
+    set_casos_reabiertos = set()
 
+# --- VALIDACIÓN SIN BLOQUEO ---
+df = pd.DataFrame() # Inicializar vacío por defecto
 
 if df_full_historial is None or df_full_historial.empty:
-    st.error("No se pudieron cargar datos. Verifica la conexión a Supabase y que la tabla 'historial_cambios' no esté vacía.")
-    st.stop()
+    st.error("⚠️ No hay conexión o la tabla 'historial_cambios' está vacía.")
+    # ELIMINADO: st.stop() - Ahora el código sigue ejecutándose
 else:
     try:
         fecha_hoy = get_current_ast_time().date()
-        if 'Timestamp_Procesado' in df_full_historial.columns and \
-            pd.api.types.is_datetime64_any_dtype(df_full_historial['Timestamp_Procesado']) and \
-            'OrdenExterna' in df_full_historial.columns:
+        if 'Timestamp_Procesado' in df_full_historial.columns and 'OrdenExterna' in df_full_historial.columns:
             df_full_historial['Fecha_Nacimiento'] = df_full_historial.groupby('OrdenExterna')['Timestamp_Procesado'].transform('min')
             df = df_full_historial[df_full_historial['Fecha_Nacimiento'].dt.date == fecha_hoy].copy()
-            if df.empty:
-                st.info(f"ℹ️ No hay tickets **nuevos** registrados en el día de hoy ({fecha_hoy.strftime('%d/%m/%Y')}).")
-        else:
-            st.error("Columnas 'Timestamp_Procesado' u 'OrdenExterna' son inválidas. No se puede filtrar por 'Nuevos Hoy'.")
-            df = pd.DataFrame(columns=df_full_historial.columns)
     except Exception as e:
-        st.error(f"Error fatal al filtrar por 'Nuevos Hoy': {e}")
-        st.error(traceback.format_exc())
-        df = pd.DataFrame(columns=df_full_historial.columns)
+        st.error(f"Error al filtrar por 'Nuevos Hoy': {e}")
 # --- FIN DE LA LÓGICA "NUEVOS HOY" ---
         
 # ==============================================================================
@@ -2231,6 +2226,17 @@ df_unicos_base = obtener_datos_unicos(df) if df is not None else pd.DataFrame()
 
 st.sidebar.title("📌 Menú")
 
+# EL BOTÓN DE REFRESCO DEBE IR AQUÍ (AL PRINCIPIO DEL SIDEBAR)
+if st.sidebar.button("🔃 Refrescar Datos Manualmente", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+boton_activar_notificaciones_movil()
+
+# ... (Sigue el resto de tu lógica de menu_options_base)
+
 boton_activar_notificaciones_movil()
 
 # --- DEFINICIÓN DEL ORDEN EXACTO DEL MENÚ ---
@@ -2261,13 +2267,7 @@ menu = st.sidebar.radio("Selecciona una página", menu_options_base)
 
 st.sidebar.markdown("---")
 
-# --- ¡CAMBIO SOLICITADO! Botón visible para TODOS los roles ---
-# Eliminamos el 'if st.session_state.user_role == ...' para que todos lo vean
-if st.sidebar.button("🔃 Refrescar Datos Manualmente"):
-    # Limpia la caché de TODAS las funciones @st.cache_data para traer datos frescos de la DB
-    st.cache_data.clear()    
-    # Vuelve a ejecutar el script inmediatamente para reflejar los cambios
-    st.rerun()
+
 # --- FIN DEL BOTÓN DE REFRESCO ---
 
 st.sidebar.subheader("Filtros")
